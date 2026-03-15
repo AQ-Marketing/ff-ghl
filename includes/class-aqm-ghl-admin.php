@@ -186,7 +186,7 @@ class AQM_GHL_Admin {
 						<th scope="row"><label for="aqm-ghl-private-token"><?php esc_html_e( 'GHL Private Integration Token', 'aqm-ghl' ); ?></label></th>
 						<td>
 							<input name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[private_token]" id="aqm-ghl-private-token" type="password" value="" placeholder="••••••••" class="regular-text" autocomplete="new-password" />
-							<p class="description"><?php esc_html_e( 'Token is masked after save. Leave blank to keep the current token.', 'aqm-ghl' ); ?></p>
+							<p class="description"><?php esc_html_e( 'Token is masked after save. Leave blank to keep the current token. If you paste a new token (e.g. with Custom Fields scope), click Save Settings so it is stored before using Refresh/Provision Custom Fields.', 'aqm-ghl' ); ?></p>
 						</td>
 					</tr>
 					<tr>
@@ -234,6 +234,7 @@ class AQM_GHL_Admin {
 				<h2><?php esc_html_e( 'Custom Field Provisioning', 'aqm-ghl' ); ?></h2>
 				<p class="description">
 					<?php esc_html_e( 'The plugin automatically creates required custom fields (UTM parameters, GCLID) in your location. Use this button to manually refresh/provision fields.', 'aqm-ghl' ); ?>
+					<?php esc_html_e( 'If you just updated the Private Integration Token above, click Save Settings first, then click the button below.', 'aqm-ghl' ); ?>
 				</p>
 				<p>
 					<button type="button" class="button button-secondary" id="aqm-ghl-provision-fields"><?php esc_html_e( 'Refresh/Provision Custom Fields', 'aqm-ghl' ); ?></button>
@@ -408,22 +409,25 @@ class AQM_GHL_Admin {
 	 * @return array
 	 */
 	public function sanitize_settings( $input ) {
-		$existing = aqm_ghl_get_settings();
-		$sanitized = array();
+		$raw_existing = get_option( AQM_GHL_OPTION_KEY, array() );
+		$raw_existing = is_array( $raw_existing ) ? $raw_existing : array();
+		$existing     = aqm_ghl_get_settings();
+		$sanitized    = array();
 
 		// Single location configuration (simplified from multi-location)
 		$sanitized['location_id'] = isset( $input['location_id'] ) ? sanitize_text_field( $input['location_id'] ) : '';
 
-		$token = isset( $input['private_token'] ) ? trim( wp_unslash( $input['private_token'] ) ) : '';
+		// Private token: use raw option when preserving so UI updates are never lost
+		$token = isset( $input['private_token'] ) ? trim( (string) wp_unslash( $input['private_token'] ) ) : '';
 		if ( '' === $token ) {
-			$sanitized['private_token'] = isset( $existing['private_token'] ) ? $existing['private_token'] : '';
+			$sanitized['private_token'] = isset( $raw_existing['private_token'] ) && is_string( $raw_existing['private_token'] ) ? $raw_existing['private_token'] : '';
 		} else {
 			$sanitized['private_token'] = sanitize_text_field( $token );
 		}
 
 		$github_token = isset( $input['github_token'] ) ? trim( wp_unslash( $input['github_token'] ) ) : '';
 		if ( '' === $github_token ) {
-			$sanitized['github_token'] = isset( $existing['github_token'] ) ? $existing['github_token'] : '';
+			$sanitized['github_token'] = isset( $raw_existing['github_token'] ) && is_string( $raw_existing['github_token'] ) ? $raw_existing['github_token'] : '';
 		} else {
 			$sanitized['github_token'] = sanitize_text_field( $github_token );
 		}
@@ -531,6 +535,16 @@ class AQM_GHL_Admin {
 
 		$sanitized['enable_logging'] = ! empty( $input['enable_logging'] ) ? 1 : 0;
 
+		// Merge with existing so we never wipe keys (e.g. locations); ensures token update persists
+		$to_save = array_merge( $raw_existing, $sanitized );
+
+		// When token is updated, sync into first location so all code paths use the new token
+		if ( ! empty( $to_save['private_token'] ) && ! empty( $to_save['locations'] ) && is_array( $to_save['locations'] ) ) {
+			if ( isset( $to_save['locations'][0] ) && is_array( $to_save['locations'][0] ) ) {
+				$to_save['locations'][0]['private_token'] = $to_save['private_token'];
+			}
+		}
+
 		add_settings_error(
 			'aqm-ghl-connector',
 			'aqm-ghl-connector-saved',
@@ -538,7 +552,7 @@ class AQM_GHL_Admin {
 			'updated'
 		);
 
-		return $sanitized;
+		return $to_save;
 	}
 
 
@@ -602,7 +616,7 @@ class AQM_GHL_Admin {
 		if ( empty( $field_mapping ) ) {
 			// Try to fetch fields directly to diagnose the issue
 			$test_response = wp_remote_get(
-				sprintf( 'https://services.leadconnectorhq.com/locations/%s/customFields/', $settings['location_id'] ),
+				sprintf( 'https://services.leadconnectorhq.com/locations/%s/customFields', $settings['location_id'] ),
 				array(
 					'headers' => array(
 						'Authorization' => 'Bearer ' . $settings['private_token'],
@@ -629,7 +643,7 @@ class AQM_GHL_Admin {
 						
 						// Try to create a test field to see if creation works
 						$create_test = wp_remote_post(
-							sprintf( 'https://services.leadconnectorhq.com/locations/%s/customFields/', $settings['location_id'] ),
+							sprintf( 'https://services.leadconnectorhq.com/locations/%s/customFields', $settings['location_id'] ),
 							array(
 								'headers' => array(
 									'Authorization' => 'Bearer ' . $settings['private_token'],
@@ -968,7 +982,7 @@ class AQM_GHL_Admin {
 		} else {
 			// Try to get more specific error information
 			$test_response = wp_remote_get(
-				sprintf( 'https://services.leadconnectorhq.com/locations/%s/customFields/', $settings['location_id'] ),
+				sprintf( 'https://services.leadconnectorhq.com/locations/%s/customFields', $settings['location_id'] ),
 				array(
 					'headers' => array(
 						'Authorization' => 'Bearer ' . $settings['private_token'],
@@ -986,7 +1000,7 @@ class AQM_GHL_Admin {
 				$test_body = wp_remote_retrieve_body( $test_response );
 				
 				if ( $test_code === 401 || $test_code === 403 ) {
-					$error_message = __( 'Failed to provision fields: Your Private Integration Token does not have permission to read/create custom fields. In GoHighLevel go to Settings → API Keys (or Integrations) → edit your Private Integration token and enable the Custom Fields scope, then paste the new token in the plugin settings. Form submissions will still create contacts; only UTM/GCLID custom fields will be skipped until the token has this scope.', 'aqm-ghl' );
+					$error_message = __( 'Failed to provision fields: The saved token was rejected by GoHighLevel (401/403). If your integration already has "View Custom Fields" and "Edit Custom Fields" scopes, copy the token again from that same integration in GoHighLevel, paste it in the Private Integration Token field above, click Save Settings, then try Refresh/Provision again. Otherwise add locations/customFields.readonly and locations/customFields.write to your token scopes and paste the new token here.', 'aqm-ghl' );
 				} elseif ( $test_code >= 400 ) {
 					$error_message = sprintf(
 						/* translators: 1: status code, 2: error body */
@@ -1036,8 +1050,10 @@ class AQM_GHL_Admin {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			wp_die( esc_html__( 'You do not have permission to import settings.', 'aqm-ghl' ), 403 );
 		}
+		$redirect_url = admin_url( 'admin.php?page=aqm-ghl-connector' );
+
 		if ( ! isset( $_POST['aqm_ghl_import_nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['aqm_ghl_import_nonce'] ) ), 'aqm_ghl_import' ) ) {
-			wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'error_nonce', menu_page_url( 'aqm-ghl-connector', false ) ) );
+			wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'error_nonce', $redirect_url ) );
 			exit;
 		}
 
@@ -1050,23 +1066,23 @@ class AQM_GHL_Admin {
 		}
 
 		if ( '' === $raw ) {
-			wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'error_empty', menu_page_url( 'aqm-ghl-connector', false ) ) );
+			wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'error_empty', $redirect_url ) );
 			exit;
 		}
 
 		$data = json_decode( $raw, true );
 		if ( json_last_error() !== JSON_ERROR_NONE || ! is_array( $data ) ) {
-			wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'error_json', menu_page_url( 'aqm-ghl-connector', false ) ) );
+			wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'error_json', $redirect_url ) );
 			exit;
 		}
 
 		$result = aqm_ghl_import_settings_data( $data );
 		if ( is_wp_error( $result ) ) {
-			wp_safe_redirect( add_query_arg( array( 'aqm_ghl_import' => 'error', 'aqm_ghl_message' => rawurlencode( $result->get_error_message() ) ), menu_page_url( 'aqm-ghl-connector', false ) ) );
+			wp_safe_redirect( add_query_arg( array( 'aqm_ghl_import' => 'error', 'aqm_ghl_message' => rawurlencode( $result->get_error_message() ) ), $redirect_url ) );
 			exit;
 		}
 
-		wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'success', menu_page_url( 'aqm-ghl-connector', false ) ) );
+		wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'success', $redirect_url ) );
 		exit;
 	}
 }

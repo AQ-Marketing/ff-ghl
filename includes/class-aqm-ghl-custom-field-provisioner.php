@@ -180,7 +180,7 @@ class AQM_GHL_Custom_Field_Provisioner {
 	 * @return array|\WP_Error Array of field objects or WP_Error on failure.
 	 */
 	private function fetch_custom_fields( $location_id, $token ) {
-		$url = sprintf( 'https://services.leadconnectorhq.com/locations/%s/customFields/', $location_id );
+		$url = sprintf( 'https://services.leadconnectorhq.com/locations/%s/customFields', $location_id );
 
 		$args = array(
 			'headers' => array(
@@ -280,7 +280,7 @@ class AQM_GHL_Custom_Field_Provisioner {
 	 * @return string|\WP_Error Field ID on success, WP_Error on failure.
 	 */
 	private function create_custom_field( $location_id, $token, $field_data ) {
-		$url = sprintf( 'https://services.leadconnectorhq.com/locations/%s/customFields/', $location_id );
+		$url = sprintf( 'https://services.leadconnectorhq.com/locations/%s/customFields', $location_id );
 
 		$payload = array(
 			'name'     => $field_data['name'],
