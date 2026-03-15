@@ -468,4 +468,71 @@ if ( ! function_exists( 'aqm_ghl_sanitize_custom_fields' ) ) {
 	}
 }
 
+if ( ! function_exists( 'aqm_ghl_export_settings_data' ) ) {
+	/**
+	 * Get all settings as stored in the database (including private_token) for export.
+	 *
+	 * @return array Export payload with version and settings.
+	 */
+	function aqm_ghl_export_settings_data() {
+		$raw      = get_option( AQM_GHL_OPTION_KEY, array() );
+		$settings = is_array( $raw ) ? $raw : array();
+
+		return array(
+			'version'  => 1,
+			'exported' => current_time( 'mysql' ),
+			'plugin'   => 'aqm-ghl-connector',
+			'settings' => $settings,
+		);
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_import_settings_data' ) ) {
+	/**
+	 * Validate and import settings from an exported JSON payload.
+	 * Retains ALL settings including location_id, private_token, locations, form_ids, etc.
+	 *
+	 * @param array $data Decoded export payload (must have 'settings' key).
+	 * @return true|\WP_Error True on success, WP_Error on failure.
+	 */
+	function aqm_ghl_import_settings_data( $data ) {
+		if ( ! is_array( $data ) || ! isset( $data['settings'] ) || ! is_array( $data['settings'] ) ) {
+			return new \WP_Error( 'invalid_format', __( 'Invalid export file: missing or invalid settings data.', 'aqm-ghl' ) );
+		}
+
+		$settings = $data['settings'];
+		$existing = get_option( AQM_GHL_OPTION_KEY, array() );
+		$existing = is_array( $existing ) ? $existing : array();
+
+		// Sanitize known string keys
+		$string_keys = array( 'location_id', 'private_token', 'tags', 'github_token' );
+		foreach ( $string_keys as $key ) {
+			if ( array_key_exists( $key, $settings ) ) {
+				$existing[ $key ] = is_string( $settings[ $key ] ) ? sanitize_text_field( $settings[ $key ] ) : '';
+			}
+		}
+		if ( array_key_exists( 'enable_logging', $settings ) ) {
+			$existing['enable_logging'] = ! empty( $settings['enable_logging'] ) ? 1 : 0;
+		}
+		if ( array_key_exists( 'form_ids', $settings ) && is_array( $settings['form_ids'] ) ) {
+			$existing['form_ids'] = array_map( 'absint', $settings['form_ids'] );
+		}
+		if ( array_key_exists( 'form_id', $settings ) ) {
+			$existing['form_id'] = absint( $settings['form_id'] );
+		}
+		if ( array_key_exists( 'mapping', $settings ) && is_array( $settings['mapping'] ) ) {
+			$existing['mapping'] = $settings['mapping'];
+		}
+		if ( array_key_exists( 'custom_fields', $settings ) && is_array( $settings['custom_fields'] ) ) {
+			$existing['custom_fields'] = $settings['custom_fields'];
+		}
+		if ( array_key_exists( 'locations', $settings ) && is_array( $settings['locations'] ) ) {
+			$existing['locations'] = $settings['locations'];
+		}
+
+		update_option( AQM_GHL_OPTION_KEY, $existing, false );
+
+		return true;
+	}
+}
 

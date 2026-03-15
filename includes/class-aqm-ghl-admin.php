@@ -20,6 +20,8 @@ class AQM_GHL_Admin {
 		add_action( 'wp_ajax_aqm_ghl_test_connection', array( $this, 'ajax_test_connection' ) );
 		add_action( 'wp_ajax_aqm_ghl_clear_update_cache', array( $this, 'ajax_clear_update_cache' ) );
 		add_action( 'wp_ajax_aqm_ghl_provision_fields', array( $this, 'ajax_provision_fields' ) );
+		add_action( 'admin_post_aqm_ghl_export_settings', array( $this, 'handle_export_settings' ) );
+		add_action( 'admin_post_aqm_ghl_import_settings', array( $this, 'handle_import_settings' ) );
 	}
 
 	/**
@@ -131,10 +133,32 @@ class AQM_GHL_Admin {
 		$last_submission   = aqm_ghl_get_last_submission_result();
 		$last_submission_payload = ! empty( $last_submission['payload'] ) ? wp_json_encode( $last_submission['payload'], JSON_PRETTY_PRINT ) : '';
 		$last_submission_context = ! empty( $last_submission['context'] ) ? wp_json_encode( $last_submission['context'], JSON_PRETTY_PRINT ) : '';
+		$import_status = isset( $_GET['aqm_ghl_import'] ) ? sanitize_text_field( wp_unslash( $_GET['aqm_ghl_import'] ) ) : '';
 		?>
 		<div class="wrap aqm-ghl-wrap">
 			<h1><?php esc_html_e( 'GHL + Formidable', 'aqm-ghl' ); ?></h1>
 			<?php settings_errors(); ?>
+			<?php if ( 'success' === $import_status ) : ?>
+				<div class="notice notice-success is-dismissible">
+					<p><?php esc_html_e( 'Settings imported successfully. All settings including GHL Location ID and Private Integration Token have been restored.', 'aqm-ghl' ); ?></p>
+				</div>
+			<?php elseif ( 'error_nonce' === $import_status ) : ?>
+				<div class="notice notice-error is-dismissible">
+					<p><?php esc_html_e( 'Import failed: security check failed.', 'aqm-ghl' ); ?></p>
+				</div>
+			<?php elseif ( 'error_empty' === $import_status ) : ?>
+				<div class="notice notice-error is-dismissible">
+					<p><?php esc_html_e( 'Import failed: no file uploaded and no JSON pasted.', 'aqm-ghl' ); ?></p>
+				</div>
+			<?php elseif ( 'error_json' === $import_status ) : ?>
+				<div class="notice notice-error is-dismissible">
+					<p><?php esc_html_e( 'Import failed: invalid JSON.', 'aqm-ghl' ); ?></p>
+				</div>
+			<?php elseif ( 'error' === $import_status && ! empty( $_GET['aqm_ghl_message'] ) ) : ?>
+				<div class="notice notice-error is-dismissible">
+					<p><?php echo esc_html( sanitize_text_field( wp_unslash( $_GET['aqm_ghl_message'] ) ) ); ?></p>
+				</div>
+			<?php endif; ?>
 			<?php if ( ! class_exists( 'FrmForm' ) ) : ?>
 				<div class="notice notice-error">
 					<p><?php esc_html_e( 'Formidable Forms is not active. Install and activate it to configure this integration.', 'aqm-ghl' ); ?></p>
@@ -336,6 +360,42 @@ class AQM_GHL_Admin {
 
 				<?php submit_button(); ?>
 			</form>
+
+			<h2><?php esc_html_e( 'Import / Export', 'aqm-ghl' ); ?></h2>
+			<p><?php esc_html_e( 'Export or import all settings (including GHL Location ID and Private Integration Token) as a JSON file.', 'aqm-ghl' ); ?></p>
+
+			<table class="form-table" role="presentation">
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Export', 'aqm-ghl' ); ?></th>
+					<td>
+						<a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=aqm_ghl_export_settings' ), 'aqm_ghl_export' ) ); ?>" class="button button-secondary">
+							<?php esc_html_e( 'Download settings (JSON)', 'aqm-ghl' ); ?>
+						</a>
+						<p class="description"><?php esc_html_e( 'Saves a copy of all current settings including credentials. Store the file securely.', 'aqm-ghl' ); ?></p>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Import', 'aqm-ghl' ); ?></th>
+					<td>
+						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" enctype="multipart/form-data" class="aqm-ghl-import-form">
+							<input type="hidden" name="action" value="aqm_ghl_import_settings" />
+							<?php wp_nonce_field( 'aqm_ghl_import', 'aqm_ghl_import_nonce' ); ?>
+							<p>
+								<label for="aqm-ghl-import-file"><?php esc_html_e( 'Upload JSON file:', 'aqm-ghl' ); ?></label>
+								<input type="file" name="aqm_ghl_import_file" id="aqm-ghl-import-file" accept=".json,application/json" />
+							</p>
+							<p class="description"><?php esc_html_e( 'Or paste JSON below (from a previous export).', 'aqm-ghl' ); ?></p>
+							<p>
+								<textarea name="aqm_ghl_import_json" id="aqm-ghl-import-json" class="large-text code" rows="6" placeholder='{"version":1,"plugin":"aqm-ghl-connector","settings":{...}}'></textarea>
+							</p>
+							<p>
+								<button type="submit" class="button button-secondary"><?php esc_html_e( 'Import settings', 'aqm-ghl' ); ?></button>
+							</p>
+						</form>
+						<p class="description"><?php esc_html_e( 'Import replaces all current settings. Use only trusted export files.', 'aqm-ghl' ); ?></p>
+					</td>
+				</tr>
+			</table>
 		</div>
 		<?php
 	}
@@ -730,9 +790,9 @@ class AQM_GHL_Admin {
 				$error_text = implode( '; ', $provisioning_errors );
 				$message .= ' ' . __( 'Errors:', 'aqm-ghl' ) . ' ' . $error_text;
 				
-				// Check for specific 401 scope error and provide helpful guidance
-				if ( strpos( $error_text, '401' ) !== false && strpos( $error_text, 'not authorized for this scope' ) !== false ) {
-					$message .= ' ' . __( 'Your Private Integration Token does not have permission to read/create custom fields. Please generate a new token in GoHighLevel with "Custom Fields" scope/permissions enabled, or manually create the custom fields in GoHighLevel and enter their IDs in the plugin settings.', 'aqm-ghl' );
+				// Check for 401/403 scope error and provide helpful guidance
+				if ( strpos( $error_text, '401' ) !== false || strpos( $error_text, '403' ) !== false ) {
+					$message .= ' ' . __( 'Your token may lack Custom Fields scope. In GoHighLevel go to Settings → API Keys → edit your Private Integration token and enable the Custom Fields scope, then paste the new token in the plugin. Form submissions still create contacts; only UTM/GCLID custom fields are skipped until the token has this scope.', 'aqm-ghl' );
 				}
 			} else {
 				$message .= ' ' . __( 'Please use the "Refresh/Provision Custom Fields" button first, or check debug logs for details.', 'aqm-ghl' );
@@ -925,8 +985,8 @@ class AQM_GHL_Admin {
 				$test_code = wp_remote_retrieve_response_code( $test_response );
 				$test_body = wp_remote_retrieve_body( $test_response );
 				
-				if ( $test_code === 401 ) {
-					$error_message = __( 'Failed to provision fields: Your Private Integration Token does not have permission to read/create custom fields. Please generate a new token in GoHighLevel with "Custom Fields" scope/permissions enabled.', 'aqm-ghl' );
+				if ( $test_code === 401 || $test_code === 403 ) {
+					$error_message = __( 'Failed to provision fields: Your Private Integration Token does not have permission to read/create custom fields. In GoHighLevel go to Settings → API Keys (or Integrations) → edit your Private Integration token and enable the Custom Fields scope, then paste the new token in the plugin settings. Form submissions will still create contacts; only UTM/GCLID custom fields will be skipped until the token has this scope.', 'aqm-ghl' );
 				} elseif ( $test_code >= 400 ) {
 					$error_message = sprintf(
 						/* translators: 1: status code, 2: error body */
@@ -944,6 +1004,70 @@ class AQM_GHL_Admin {
 				500
 			);
 		}
+	}
+
+	/**
+	 * Handle export: output JSON file with all settings (including credentials).
+	 */
+	public function handle_export_settings() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to export settings.', 'aqm-ghl' ), 403 );
+		}
+		if ( ! isset( $_GET['_wpnonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'aqm_ghl_export' ) ) {
+			wp_die( esc_html__( 'Security check failed.', 'aqm-ghl' ), 403 );
+		}
+
+		$data  = aqm_ghl_export_settings_data();
+		$json  = wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
+		$filename = 'aqm-ghl-connector-settings-' . gmdate( 'Y-m-d-His' ) . '.json';
+		header( 'Content-Type: application/json; charset=' . get_option( 'blog_charset' ) );
+		header( 'Content-Disposition: attachment; filename="' . sanitize_file_name( $filename ) . '"' );
+		header( 'Cache-Control: no-cache, must-revalidate' );
+		header( 'Expires: 0' );
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- JSON export, not HTML
+		echo $json;
+		exit;
+	}
+
+	/**
+	 * Handle import: validate JSON and save all settings.
+	 */
+	public function handle_import_settings() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to import settings.', 'aqm-ghl' ), 403 );
+		}
+		if ( ! isset( $_POST['aqm_ghl_import_nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['aqm_ghl_import_nonce'] ) ), 'aqm_ghl_import' ) ) {
+			wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'error_nonce', menu_page_url( 'aqm-ghl-connector', false ) ) );
+			exit;
+		}
+
+		$raw = '';
+		if ( ! empty( $_FILES['aqm_ghl_import_file']['tmp_name'] ) && is_uploaded_file( $_FILES['aqm_ghl_import_file']['tmp_name'] ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+			$raw = file_get_contents( $_FILES['aqm_ghl_import_file']['tmp_name'] );
+		} elseif ( ! empty( $_POST['aqm_ghl_import_json'] ) && is_string( $_POST['aqm_ghl_import_json'] ) ) {
+			$raw = wp_unslash( $_POST['aqm_ghl_import_json'] );
+		}
+
+		if ( '' === $raw ) {
+			wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'error_empty', menu_page_url( 'aqm-ghl-connector', false ) ) );
+			exit;
+		}
+
+		$data = json_decode( $raw, true );
+		if ( json_last_error() !== JSON_ERROR_NONE || ! is_array( $data ) ) {
+			wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'error_json', menu_page_url( 'aqm-ghl-connector', false ) ) );
+			exit;
+		}
+
+		$result = aqm_ghl_import_settings_data( $data );
+		if ( is_wp_error( $result ) ) {
+			wp_safe_redirect( add_query_arg( array( 'aqm_ghl_import' => 'error', 'aqm_ghl_message' => rawurlencode( $result->get_error_message() ) ), menu_page_url( 'aqm-ghl-connector', false ) ) );
+			exit;
+		}
+
+		wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'success', menu_page_url( 'aqm-ghl-connector', false ) ) );
+		exit;
 	}
 }
 
