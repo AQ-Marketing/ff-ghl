@@ -231,10 +231,10 @@ class AQM_GHL_Admin {
 
 				<h2><?php esc_html_e( 'Field Mapping', 'aqm-ghl' ); ?></h2>
 				<p class="description" style="margin-bottom: 1em;">
-					<?php esc_html_e( 'Click "Fetch GHL Custom Fields" to load all custom fields from your GHL location. These will appear as dropdowns in the Custom Fields mapping below.', 'aqm-ghl' ); ?>
+					<?php esc_html_e( 'GHL custom fields are auto-detected and mapped to matching Formidable fields. Use "Refresh GHL Fields" if you have added or changed fields in GHL.', 'aqm-ghl' ); ?>
 				</p>
 				<p>
-					<button type="button" class="button button-secondary" id="aqm-ghl-fetch-ghl-fields"><?php esc_html_e( 'Fetch GHL Custom Fields', 'aqm-ghl' ); ?></button>
+					<button type="button" class="button button-secondary" id="aqm-ghl-fetch-ghl-fields"><?php esc_html_e( 'Refresh GHL Fields', 'aqm-ghl' ); ?></button>
 					<button type="button" class="button button-secondary" id="aqm-ghl-provision-fields"><?php esc_html_e( 'Provision UTM/GCLID Fields', 'aqm-ghl' ); ?></button>
 					<span id="aqm-ghl-fetch-result" class="aqm-ghl-fetch-result" style="display:none;"></span>
 					<span id="aqm-ghl-provision-result" class="notice inline" style="display:none; margin-left: 10px;"></span>

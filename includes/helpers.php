@@ -544,12 +544,17 @@ if ( ! function_exists( 'aqm_ghl_get_cached_ghl_custom_fields' ) ) {
 	 */
 	function aqm_ghl_get_cached_ghl_custom_fields() {
 		$settings = aqm_ghl_get_settings();
-		if ( empty( $settings['location_id'] ) ) {
+		if ( empty( $settings['location_id'] ) || empty( $settings['private_token'] ) ) {
 			return array();
 		}
 		$cache_key = 'aqm_ghl_cf_' . md5( $settings['location_id'] );
 		$cached    = get_transient( $cache_key );
-		return is_array( $cached ) ? $cached : array();
+		if ( is_array( $cached ) ) {
+			return $cached;
+		}
+		// Auto-fetch from API when cache is empty and credentials exist.
+		$fields = aqm_ghl_fetch_ghl_custom_fields( $settings['location_id'], $settings['private_token'], false );
+		return is_array( $fields ) ? $fields : array();
 	}
 }
 

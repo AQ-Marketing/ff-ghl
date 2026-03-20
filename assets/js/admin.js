@@ -8,6 +8,54 @@
 	let formFieldsCache = {};
 	let ghlCustomFields = Array.isArray(settings.ghlFields) ? settings.ghlFields : [];
 
+	// Names that are handled by the core mapping section — never auto-map these.
+	const coreFieldNames = ['email', 'phone', 'phonenumber', 'firstname', 'first name',
+		'lastname', 'last name', 'fullname', 'full name', 'name'];
+
+	function normalize(str) {
+		return (str || '').toLowerCase().replace(/[_\-\s]+/g, '');
+	}
+
+	function isCoreField(name) {
+		return coreFieldNames.indexOf(normalize(name)) !== -1;
+	}
+
+	/**
+	 * Find the best matching Formidable field for a GHL custom field.
+	 * Matches against name and fieldKey (e.g. "contact.utm_source" → "utm_source").
+	 * Returns the Formidable field id or '' if no match.
+	 */
+	function findMatchingFormField(ghlField, formFields) {
+		if (!formFields.length) return '';
+
+		// Build candidate search terms from the GHL field.
+		var terms = [];
+		if (ghlField.name) terms.push(normalize(ghlField.name));
+		if (ghlField.fieldKey) {
+			// fieldKey is like "contact.utm_source" — use the part after the dot.
+			var parts = ghlField.fieldKey.split('.');
+			var keyPart = parts[parts.length - 1];
+			terms.push(normalize(keyPart));
+		}
+
+		// Exact normalized match against any term.
+		for (var t = 0; t < terms.length; t++) {
+			if (!terms[t]) continue;
+			for (var i = 0; i < formFields.length; i++) {
+				if (normalize(formFields[i].label) === terms[t]) return formFields[i].id;
+			}
+		}
+		// Substring match: one contains the other.
+		for (var t = 0; t < terms.length; t++) {
+			if (!terms[t]) continue;
+			for (var i = 0; i < formFields.length; i++) {
+				var fl = normalize(formFields[i].label);
+				if (fl && (fl.indexOf(terms[t]) !== -1 || terms[t].indexOf(fl) !== -1)) return formFields[i].id;
+			}
+		}
+		return '';
+	}
+
 	function setSelectOptions($select, fields, selected) {
 		$select.empty();
 		$select.append(new Option(settings.labels.select, '', false, false));
@@ -32,7 +80,8 @@
 				.addClass('regular-text aqm-ghl-custom-ghl-select');
 			$select.append(new Option(settings.labels.selectGhl || 'Select a GHL field', '', false, false));
 			ghlCustomFields.forEach(function (cf) {
-				const label = cf.name + (cf.dataType ? ' (' + cf.dataType + ')' : '');
+				const key = cf.fieldKey ? '{{ ' + cf.fieldKey + ' }}' : cf.id;
+				const label = cf.name + ' — ' + key;
 				const isSelected = selectedId && selectedId === cf.id;
 				$select.append(new Option(label, cf.id, isSelected, isSelected));
 			});
@@ -80,12 +129,37 @@
 		const existingByForm = settings.customFields || {};
 		const existing = existingByForm[formIdInt] || [];
 
-		if (existing.length === 0) {
-			addCustomFieldRow(formId, container, null, fields);
-			return;
+		// Build a set of GHL field IDs that already have a saved mapping.
+		const mappedGhlIds = new Set();
+		existing.forEach(function (field) {
+			if (field.ghl_field_id) mappedGhlIds.add(field.ghl_field_id);
+		});
+
+		// Render saved mappings first.
+		existing.forEach((field) => addCustomFieldRow(formId, container, field, fields));
+
+		// Auto-map: for each GHL custom field NOT already mapped, try to match.
+		if (ghlCustomFields.length > 0) {
+			let added = 0;
+			ghlCustomFields.forEach(function (cf) {
+				if (mappedGhlIds.has(cf.id)) return;   // already mapped
+				if (isCoreField(cf.name)) return;      // handled by core mapping
+				const matchedFormField = findMatchingFormField(cf, fields);
+				addCustomFieldRow(formId, container, {
+					ghl_field_id: cf.id,
+					form_field_id: matchedFormField,
+				}, fields);
+				added++;
+			});
+			if (added > 0) {
+				console.log('[AQM GHL] Auto-mapped ' + added + ' GHL fields for form ' + formIdInt);
+			}
 		}
 
-		existing.forEach((field) => addCustomFieldRow(formId, container, field, fields));
+		// Always show at least one empty row if nothing was rendered.
+		if (container.find('.aqm-ghl-custom-field-row').length === 0) {
+			addCustomFieldRow(formId, container, null, fields);
+		}
 	}
 
 	function loadFields(formId) {
@@ -329,7 +403,7 @@
 				});
 		});
 
-		// Handle fetch GHL custom fields button
+		// Handle refresh GHL custom fields button
 		$('#aqm-ghl-fetch-ghl-fields').on('click', function (e) {
 			e.preventDefault();
 			const $button = $(this);
@@ -340,64 +414,64 @@
 			}
 
 			$result.hide().removeClass('aqm-ghl-fetch-success aqm-ghl-fetch-error').text('');
-			$button.prop('disabled', true).text('Fetching...');
+			$button.prop('disabled', true).text('Refreshing...');
 
+			fetchGhlFields()
+				.then(function (count) {
+					$result
+						.addClass('aqm-ghl-fetch-success')
+						.removeClass('aqm-ghl-fetch-error')
+						.text('Loaded ' + count + ' GHL fields. Auto-mapped to forms.')
+						.show();
+				})
+				.catch(function (msg) {
+					$result
+						.addClass('aqm-ghl-fetch-error')
+						.removeClass('aqm-ghl-fetch-success')
+						.text(msg)
+						.show();
+				})
+				.finally(function () {
+					$button.prop('disabled', false).text('Refresh GHL Fields');
+				});
+		});
+
+		/**
+		 * Fetch GHL fields from API, update ghlCustomFields, and rebuild form blocks.
+		 * Returns a promise that resolves with the field count.
+		 */
+		function fetchGhlFields() {
 			const data = new URLSearchParams();
 			data.append('action', 'aqm_ghl_fetch_ghl_fields');
 			data.append('nonce', settings.nonce);
 
-			fetch(settings.ajaxUrl, {
+			return fetch(settings.ajaxUrl, {
 				method: 'POST',
 				credentials: 'same-origin',
 				headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
 				body: data.toString(),
 			})
-				.then(async (response) => {
-					let json;
-					try {
-						json = await response.json();
-					} catch (err) {
-						return { success: false, data: { message: 'Unexpected response from server.' } };
-					}
-					return json;
-				})
-				.then((json) => {
+				.then(function (response) { return response.json(); })
+				.then(function (json) {
 					if (json && json.success && Array.isArray(json.data.fields)) {
 						ghlCustomFields = json.data.fields;
-						$result
-							.addClass('aqm-ghl-fetch-success')
-							.removeClass('aqm-ghl-fetch-error')
-							.text('Loaded ' + ghlCustomFields.length + ' GHL fields.')
-							.show();
-						refreshAllGhlDropdowns();
-					} else {
-						const msg = (json && json.data && json.data.message) ? json.data.message : 'Failed to fetch GHL fields.';
-						$result
-							.addClass('aqm-ghl-fetch-error')
-							.removeClass('aqm-ghl-fetch-success')
-							.text(msg)
-							.show();
+						rebuildAllCustomFieldSections();
+						return ghlCustomFields.length;
 					}
-				})
-				.catch(() => {
-					$result.addClass('aqm-ghl-fetch-error').removeClass('aqm-ghl-fetch-success').text('Request failed.').show();
-				})
-				.finally(() => {
-					$button.prop('disabled', false).text('Fetch GHL Custom Fields');
+					throw (json && json.data && json.data.message) ? json.data.message : 'Failed to fetch GHL fields.';
 				});
-		});
+		}
 
-		function refreshAllGhlDropdowns() {
-			$('.aqm-ghl-custom-field-row').each(function () {
-				const $row = $(this);
-				const $existing = $row.find('.aqm-ghl-custom-ghl, .aqm-ghl-custom-ghl-select');
-				if (!$existing.length) return;
-
-				const currentVal = $existing.val() || '';
-				const nameAttr = $existing.attr('name');
-
-				const $replacement = buildGhlFieldControl(nameAttr, currentVal);
-				$existing.replaceWith($replacement);
+		/**
+		 * Re-render the custom-fields section of every visible form block
+		 * so auto-mapping runs against the latest GHL field list.
+		 */
+		function rebuildAllCustomFieldSections() {
+			$('.aqm-ghl-form-block').each(function () {
+				const $block = $(this);
+				const formIdInt = parseInt($block.data('form-id'), 10);
+				const formFields = formFieldsCache[formIdInt] || [];
+				renderCustomFields(formIdInt, $block, formFields);
 			});
 		}
 
