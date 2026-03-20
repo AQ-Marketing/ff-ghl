@@ -558,6 +558,148 @@ if ( ! function_exists( 'aqm_ghl_get_cached_ghl_custom_fields' ) ) {
 	}
 }
 
+if ( ! function_exists( 'aqm_ghl_sync_ghl_fields_to_forms' ) ) {
+	/**
+	 * Create hidden fields in selected Formidable forms for each GHL custom field
+	 * and set the Default Value to the GHL fieldKey (e.g. {{ contact.utm_source }}).
+	 * Also auto-maps the new fields in plugin settings.
+	 *
+	 * @return array Summary with created/updated counts.
+	 */
+	function aqm_ghl_sync_ghl_fields_to_forms() {
+		if ( ! class_exists( 'FrmField' ) ) {
+			return array( 'created' => 0, 'updated' => 0, 'mapped' => 0 );
+		}
+
+		$settings   = aqm_ghl_get_settings();
+		$form_ids   = ! empty( $settings['form_ids'] ) ? (array) $settings['form_ids'] : array();
+		$ghl_fields = aqm_ghl_get_cached_ghl_custom_fields();
+
+		if ( empty( $form_ids ) || empty( $ghl_fields ) ) {
+			return array( 'created' => 0, 'updated' => 0, 'mapped' => 0 );
+		}
+
+		// Core field names handled by the standard mapping — never auto-create these.
+		$core_names = array( 'email', 'phone', 'phonenumber', 'firstname', 'lastname', 'name', 'fullname' );
+
+		$created_count  = 0;
+		$updated_count  = 0;
+		$mapped_count   = 0;
+		$settings_dirty = false;
+
+		if ( ! isset( $settings['custom_fields'] ) || ! is_array( $settings['custom_fields'] ) ) {
+			$settings['custom_fields'] = array();
+		}
+
+		foreach ( $form_ids as $form_id ) {
+			$form_id = absint( $form_id );
+			if ( ! $form_id ) {
+				continue;
+			}
+
+			// Get all existing Formidable fields for this form.
+			$existing = FrmField::getAll( array( 'fi.form_id' => $form_id ) );
+
+			// Index by normalised default-value and normalised label.
+			$by_default = array();
+			$by_label   = array();
+			$max_order  = 0;
+
+			foreach ( $existing as $f ) {
+				$dv = isset( $f->default_value ) ? strtolower( trim( $f->default_value ) ) : '';
+				if ( $dv ) {
+					$by_default[ $dv ] = $f;
+				}
+				$label = isset( $f->name ) ? strtolower( trim( $f->name ) ) : '';
+				if ( $label ) {
+					$by_label[ $label ] = $f;
+				}
+				if ( isset( $f->field_order ) && (int) $f->field_order > $max_order ) {
+					$max_order = (int) $f->field_order;
+				}
+			}
+
+			// Ensure mapping array for this form.
+			if ( ! isset( $settings['custom_fields'][ $form_id ] ) ) {
+				$settings['custom_fields'][ $form_id ] = array();
+			}
+
+			// Build set of GHL IDs already mapped for this form.
+			$mapped_ghl = array();
+			foreach ( $settings['custom_fields'][ $form_id ] as $m ) {
+				if ( ! empty( $m['ghl_field_id'] ) ) {
+					$mapped_ghl[ $m['ghl_field_id'] ] = true;
+				}
+			}
+
+			foreach ( $ghl_fields as $ghl ) {
+				// Skip core fields.
+				$norm = strtolower( str_replace( array( '_', '-', ' ' ), '', $ghl['name'] ) );
+				if ( in_array( $norm, $core_names, true ) ) {
+					continue;
+				}
+				if ( empty( $ghl['fieldKey'] ) ) {
+					continue;
+				}
+
+				$default_val = '{{ ' . $ghl['fieldKey'] . ' }}';
+				$default_key = strtolower( $default_val );
+				$label_key   = strtolower( trim( $ghl['name'] ) );
+				$frm_field_id = null;
+
+				// 1. Field with this default value already exists.
+				if ( isset( $by_default[ $default_key ] ) ) {
+					$frm_field_id = (int) $by_default[ $default_key ]->id;
+				}
+				// 2. Field with matching label exists — update its default value.
+				elseif ( isset( $by_label[ $label_key ] ) ) {
+					$frm_field_id = (int) $by_label[ $label_key ]->id;
+					FrmField::update( $frm_field_id, array( 'default_value' => $default_val ) );
+					$updated_count++;
+				}
+				// 3. Create a new hidden field.
+				else {
+					$max_order++;
+					$new_id = FrmField::create(
+						array(
+							'form_id'       => $form_id,
+							'name'          => $ghl['name'],
+							'type'          => 'hidden',
+							'default_value' => $default_val,
+							'field_order'   => $max_order,
+						)
+					);
+					if ( $new_id ) {
+						$frm_field_id = (int) $new_id;
+						$created_count++;
+					}
+				}
+
+				// Ensure the mapping exists.
+				if ( $frm_field_id && ! isset( $mapped_ghl[ $ghl['id'] ] ) ) {
+					$settings['custom_fields'][ $form_id ][] = array(
+						'ghl_field_id'  => $ghl['id'],
+						'form_field_id' => (string) $frm_field_id,
+					);
+					$mapped_ghl[ $ghl['id'] ] = true;
+					$mapped_count++;
+					$settings_dirty = true;
+				}
+			}
+		}
+
+		if ( $settings_dirty ) {
+			update_option( AQM_GHL_OPTION_KEY, $settings );
+		}
+
+		return array(
+			'created' => $created_count,
+			'updated' => $updated_count,
+			'mapped'  => $mapped_count,
+		);
+	}
+}
+
 if ( ! function_exists( 'aqm_ghl_export_settings_data' ) ) {
 	/**
 	 * Get all settings as stored in the database (including private_token) for export.

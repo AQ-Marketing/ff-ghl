@@ -72,6 +72,9 @@ class AQM_GHL_Admin {
 			true
 		);
 
+		// Auto-sync GHL fields → Formidable hidden fields on page load.
+		aqm_ghl_sync_ghl_fields_to_forms();
+
 		$current_settings = aqm_ghl_get_settings();
 		$forms            = aqm_ghl_get_formidable_forms();
 		$form_options     = array();
@@ -1049,10 +1052,14 @@ class AQM_GHL_Admin {
 			);
 		}
 
+		// Sync: create hidden fields in Formidable forms and auto-map.
+		$sync = aqm_ghl_sync_ghl_fields_to_forms();
+
 		wp_send_json_success(
 			array(
-				'fields' => $fields,
-				'count'  => count( $fields ),
+				'fields'  => $fields,
+				'count'   => count( $fields ),
+				'sync'    => $sync,
 			)
 		);
 	}

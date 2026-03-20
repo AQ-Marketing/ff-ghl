@@ -417,11 +417,17 @@
 			$button.prop('disabled', true).text('Refreshing...');
 
 			fetchGhlFields()
-				.then(function (count) {
+				.then(function (data) {
+					var msg = 'Loaded ' + data.count + ' GHL fields.';
+					if (data.sync) {
+						if (data.sync.created) msg += ' Created ' + data.sync.created + ' hidden fields.';
+						if (data.sync.updated) msg += ' Updated ' + data.sync.updated + ' fields.';
+						if (data.sync.mapped) msg += ' Auto-mapped ' + data.sync.mapped + ' fields.';
+					}
 					$result
 						.addClass('aqm-ghl-fetch-success')
 						.removeClass('aqm-ghl-fetch-error')
-						.text('Loaded ' + count + ' GHL fields. Auto-mapped to forms.')
+						.text(msg)
 						.show();
 				})
 				.catch(function (msg) {
@@ -456,7 +462,7 @@
 					if (json && json.success && Array.isArray(json.data.fields)) {
 						ghlCustomFields = json.data.fields;
 						rebuildAllCustomFieldSections();
-						return ghlCustomFields.length;
+						return { count: ghlCustomFields.length, sync: json.data.sync || null };
 					}
 					throw (json && json.data && json.data.message) ? json.data.message : 'Failed to fetch GHL fields.';
 				});
