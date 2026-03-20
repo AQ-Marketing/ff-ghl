@@ -20,6 +20,7 @@ class AQM_GHL_Admin {
 		add_action( 'wp_ajax_aqm_ghl_test_connection', array( $this, 'ajax_test_connection' ) );
 		add_action( 'wp_ajax_aqm_ghl_clear_update_cache', array( $this, 'ajax_clear_update_cache' ) );
 		add_action( 'wp_ajax_aqm_ghl_provision_fields', array( $this, 'ajax_provision_fields' ) );
+		add_action( 'wp_ajax_aqm_ghl_fetch_ghl_fields', array( $this, 'ajax_fetch_ghl_fields' ) );
 		add_action( 'admin_post_aqm_ghl_export_settings', array( $this, 'handle_export_settings' ) );
 		add_action( 'admin_post_aqm_ghl_import_settings', array( $this, 'handle_import_settings' ) );
 	}
@@ -108,11 +109,13 @@ class AQM_GHL_Admin {
 				'selectedForms' => isset( $current_settings['form_ids'] ) && is_array( $current_settings['form_ids'] ) ? array_map( 'absint', $current_settings['form_ids'] ) : array(),
 				'mapping'       => $mapping_normalized,
 				'customFields'  => $custom_fields_normalized,
+				'ghlFields'     => aqm_ghl_get_cached_ghl_custom_fields(),
 				'forms'         => $form_options,
 				'optionKey'     => AQM_GHL_OPTION_KEY,
 				'labels'        => array(
-					'loading' => __( 'Loading fields…', 'aqm-ghl' ),
-					'select'  => __( 'Select a field', 'aqm-ghl' ),
+					'loading'    => __( 'Loading fields…', 'aqm-ghl' ),
+					'select'     => __( 'Select a field', 'aqm-ghl' ),
+					'selectGhl'  => __( 'Select a GHL field', 'aqm-ghl' ),
 				),
 			)
 		);
@@ -227,21 +230,15 @@ class AQM_GHL_Admin {
 				</table>
 
 				<h2><?php esc_html_e( 'Field Mapping', 'aqm-ghl' ); ?></h2>
-				<div id="aqm-ghl-form-mapping-containers">
-					<!-- Per-form mapping containers injected by JS -->
-				</div>
-
-				<h2><?php esc_html_e( 'Custom Field Provisioning', 'aqm-ghl' ); ?></h2>
-				<p class="description">
-					<?php esc_html_e( 'The plugin automatically creates required custom fields (UTM parameters, GCLID) in your location. Use this button to manually refresh/provision fields.', 'aqm-ghl' ); ?>
-					<?php esc_html_e( 'If you just updated the Private Integration Token above, click Save Settings first, then click the button below.', 'aqm-ghl' ); ?>
+				<p class="description" style="margin-bottom: 1em;">
+					<?php esc_html_e( 'Click "Fetch GHL Custom Fields" to load all custom fields from your GHL location. These will appear as dropdowns in the Custom Fields mapping below.', 'aqm-ghl' ); ?>
 				</p>
 				<p>
-					<button type="button" class="button button-secondary" id="aqm-ghl-provision-fields"><?php esc_html_e( 'Refresh/Provision Custom Fields', 'aqm-ghl' ); ?></button>
+					<button type="button" class="button button-secondary" id="aqm-ghl-fetch-ghl-fields"><?php esc_html_e( 'Fetch GHL Custom Fields', 'aqm-ghl' ); ?></button>
+					<button type="button" class="button button-secondary" id="aqm-ghl-provision-fields"><?php esc_html_e( 'Provision UTM/GCLID Fields', 'aqm-ghl' ); ?></button>
+					<span id="aqm-ghl-fetch-result" class="aqm-ghl-fetch-result" style="display:none;"></span>
 					<span id="aqm-ghl-provision-result" class="notice inline" style="display:none; margin-left: 10px;"></span>
 				</p>
-
-				<h2><?php esc_html_e( 'Field Mapping', 'aqm-ghl' ); ?></h2>
 				<div id="aqm-ghl-form-mapping-containers">
 					<!-- Per-form mapping containers injected by JS -->
 				</div>
@@ -1018,6 +1015,46 @@ class AQM_GHL_Admin {
 				500
 			);
 		}
+	}
+
+	/**
+	 * AJAX handler to fetch all custom fields from the GoHighLevel API.
+	 */
+	public function ajax_fetch_ghl_fields() {
+		check_ajax_referer( 'aqm_ghl_admin', 'nonce' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( array( 'message' => __( 'Unauthorized', 'aqm-ghl' ) ), 403 );
+		}
+
+		$settings = aqm_ghl_get_settings();
+
+		if ( empty( $settings['location_id'] ) || empty( $settings['private_token'] ) ) {
+			wp_send_json_error(
+				array(
+					'message' => __( 'Save your GHL Location ID and Private Integration Token before fetching custom fields.', 'aqm-ghl' ),
+				),
+				400
+			);
+		}
+
+		$fields = aqm_ghl_fetch_ghl_custom_fields( $settings['location_id'], $settings['private_token'], true );
+
+		if ( is_wp_error( $fields ) ) {
+			wp_send_json_error(
+				array(
+					'message' => $fields->get_error_message(),
+				),
+				500
+			);
+		}
+
+		wp_send_json_success(
+			array(
+				'fields' => $fields,
+				'count'  => count( $fields ),
+			)
+		);
 	}
 
 	/**

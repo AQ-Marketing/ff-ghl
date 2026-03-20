@@ -468,6 +468,91 @@ if ( ! function_exists( 'aqm_ghl_sanitize_custom_fields' ) ) {
 	}
 }
 
+if ( ! function_exists( 'aqm_ghl_fetch_ghl_custom_fields' ) ) {
+	/**
+	 * Fetch custom fields from the GoHighLevel API for a location.
+	 *
+	 * @param string $location_id GHL Location ID.
+	 * @param string $token       Private integration token.
+	 * @param bool   $force       Force refresh (ignore cache).
+	 *
+	 * @return array|\WP_Error Array of custom field objects or WP_Error.
+	 */
+	function aqm_ghl_fetch_ghl_custom_fields( $location_id, $token, $force = false ) {
+		$cache_key = 'aqm_ghl_cf_' . md5( $location_id );
+
+		if ( ! $force ) {
+			$cached = get_transient( $cache_key );
+			if ( is_array( $cached ) ) {
+				return $cached;
+			}
+		}
+
+		$url = 'https://services.leadconnectorhq.com/locations/' . rawurlencode( $location_id ) . '/customFields';
+
+		$response = wp_remote_get(
+			$url,
+			array(
+				'headers' => array(
+					'Authorization' => 'Bearer ' . $token,
+					'Version'       => '2021-07-28',
+				),
+				'timeout' => 15,
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( $code < 200 || $code >= 300 ) {
+			$msg = isset( $body['message'] ) ? $body['message'] : wp_remote_retrieve_body( $response );
+			return new \WP_Error( 'ghl_api_error', sprintf( 'GHL API returned %d: %s', $code, $msg ) );
+		}
+
+		if ( ! isset( $body['customFields'] ) || ! is_array( $body['customFields'] ) ) {
+			return new \WP_Error( 'ghl_invalid_response', 'Unexpected response format from GHL custom fields endpoint.' );
+		}
+
+		$fields = array();
+		foreach ( $body['customFields'] as $field ) {
+			if ( empty( $field['id'] ) ) {
+				continue;
+			}
+			$fields[] = array(
+				'id'       => sanitize_text_field( $field['id'] ),
+				'name'     => isset( $field['name'] ) ? sanitize_text_field( $field['name'] ) : '',
+				'fieldKey' => isset( $field['fieldKey'] ) ? sanitize_text_field( $field['fieldKey'] ) : '',
+				'dataType' => isset( $field['dataType'] ) ? sanitize_text_field( $field['dataType'] ) : '',
+			);
+		}
+
+		set_transient( $cache_key, $fields, HOUR_IN_SECONDS );
+
+		return $fields;
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_get_cached_ghl_custom_fields' ) ) {
+	/**
+	 * Return cached GHL custom fields (no API call if cache is empty).
+	 *
+	 * @return array
+	 */
+	function aqm_ghl_get_cached_ghl_custom_fields() {
+		$settings = aqm_ghl_get_settings();
+		if ( empty( $settings['location_id'] ) ) {
+			return array();
+		}
+		$cache_key = 'aqm_ghl_cf_' . md5( $settings['location_id'] );
+		$cached    = get_transient( $cache_key );
+		return is_array( $cached ) ? $cached : array();
+	}
+}
+
 if ( ! function_exists( 'aqm_ghl_export_settings_data' ) ) {
 	/**
 	 * Get all settings as stored in the database (including private_token) for export.

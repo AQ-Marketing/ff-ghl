@@ -4,6 +4,3 @@
 .idea/
 node_modules/
 vendor/
-FTP-Deploy/
-.last-ftp-deploy.json
-

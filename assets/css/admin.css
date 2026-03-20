@@ -155,4 +155,27 @@
 	padding-bottom: 8px;
 }
 
+.aqm-ghl-fetch-result {
+	display: inline-block;
+	margin-left: 10px;
+	padding: 4px 10px;
+	border-radius: 3px;
+	font-size: 13px;
+	vertical-align: middle;
+}
+
+.aqm-ghl-fetch-success {
+	color: #00a32a;
+	background: #edfaef;
+}
+
+.aqm-ghl-fetch-error {
+	color: #d63638;
+	background: #fcf0f1;
+}
+
+.aqm-ghl-custom-field-row select.aqm-ghl-custom-ghl-select {
+	min-width: 260px;
+}
+
 
