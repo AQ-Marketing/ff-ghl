@@ -702,21 +702,30 @@ class AQM_GHL_Admin {
 		// Build initial payload
 		$unique_email = sprintf( 'john.doe+ghl-test-%s@example.com', substr( wp_generate_uuid4(), 0, 8 ) );
 		$payload = array(
-			'locationId' => $settings['location_id'],
-			'email'      => $unique_email,
-			'phone'      => '+15555550123',
-			'firstName'  => 'John',
-			'lastName'   => 'Doe',
-			'tags'       => array( 'Test', 'AQM Connector' ),
-			'customFields' => array(
-				array(
-					'id'    => 'custom_test_note',
-					'value' => 'Test connection from WordPress',
-				),
-			),
+			'locationId'   => $settings['location_id'],
+			'email'        => $unique_email,
+			'phone'        => '+15555550123',
+			'firstName'    => 'John',
+			'lastName'     => 'Doe',
+			'tags'         => array( 'Test', 'AQM Connector' ),
+			'customFields' => array(),
 		);
 
-		// Inject test UTM parameters and GCLID using provisioned field IDs
+		// Add ALL GHL custom fields with test values so the test contact shows them.
+		$ghl_fields = aqm_ghl_get_cached_ghl_custom_fields();
+		$core_skip  = array( 'email', 'phone', 'phonenumber', 'firstname', 'lastname', 'name', 'fullname' );
+		foreach ( $ghl_fields as $cf ) {
+			$norm = strtolower( str_replace( array( '_', '-', ' ' ), '', $cf['name'] ) );
+			if ( in_array( $norm, $core_skip, true ) ) {
+				continue;
+			}
+			$payload['customFields'][] = array(
+				'id'    => $cf['id'],
+				'value' => 'test_' . ( ! empty( $cf['fieldKey'] ) ? str_replace( 'contact.', '', $cf['fieldKey'] ) : $cf['id'] ),
+			);
+		}
+
+		// Also inject test UTM parameters via provisioned field IDs (may overlap, GHL dedupes by id).
 		$payload = $this->inject_test_utm_data( $payload, $settings['location_id'], $settings['private_token'] );
 
 		$payload = aqm_ghl_clean_payload( $payload );
