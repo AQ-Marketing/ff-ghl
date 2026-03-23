@@ -606,11 +606,28 @@ if ( ! function_exists( 'aqm_ghl_sync_ghl_fields_to_forms' ) ) {
 			$max_order  = 0;
 
 			foreach ( $existing as $f ) {
-				$dv = isset( $f->default_value ) ? strtolower( trim( $f->default_value ) ) : '';
+				// default_value can be a string or array (e.g. some field types); never pass arrays to trim().
+				$raw_dv = isset( $f->default_value ) ? $f->default_value : '';
+				if ( is_array( $raw_dv ) ) {
+					$raw_dv = implode( ' ', array_filter( array_map( 'strval', $raw_dv ) ) );
+				} elseif ( is_scalar( $raw_dv ) ) {
+					$raw_dv = (string) $raw_dv;
+				} else {
+					$raw_dv = '';
+				}
+				$dv = '' !== $raw_dv ? strtolower( trim( $raw_dv ) ) : '';
 				if ( $dv ) {
 					$by_default[ $dv ] = $f;
 				}
-				$label = isset( $f->name ) ? strtolower( trim( $f->name ) ) : '';
+				$raw_label = isset( $f->name ) ? $f->name : '';
+				if ( is_array( $raw_label ) ) {
+					$raw_label = implode( ' ', array_filter( array_map( 'strval', $raw_label ) ) );
+				} elseif ( is_scalar( $raw_label ) ) {
+					$raw_label = (string) $raw_label;
+				} else {
+					$raw_label = '';
+				}
+				$label = '' !== $raw_label ? strtolower( trim( $raw_label ) ) : '';
 				if ( $label ) {
 					$by_label[ $label ] = $f;
 				}
