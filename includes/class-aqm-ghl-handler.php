@@ -281,15 +281,70 @@ class AQM_GHL_Handler {
 				continue;
 			}
 
-			$value = $this->get_meta_value( $metas, $field );
-
-			if ( null === $value || '' === $value || array() === $value ) {
+			$destination = $this->parse_ghl_custom_field_destination( $ghl_id );
+			if ( empty( $destination['type'] ) || empty( $destination['value'] ) ) {
+				aqm_ghl_log(
+					'Custom field mapping skipped: invalid GHL destination identifier.',
+					array(
+						'form_id'         => (int) $form_id,
+						'form_field_id'   => (int) $field,
+						'field_key'       => $this->get_formidable_field_key( $field ),
+						'ghl_destination' => $ghl_id,
+					)
+				);
 				continue;
 			}
 
-			$prepared[] = array(
-				'id'    => $ghl_id,
-				'value' => is_array( $value ) ? implode( ', ', array_filter( $value ) ) : $value,
+			$raw_value   = $this->get_meta_value( $metas, $field );
+			$final_value = $this->sanitize_custom_field_value( $raw_value );
+
+			// Never send literal merge tags / placeholders as custom field values.
+			if ( $this->is_merge_token_like_value( $final_value ) ) {
+				aqm_ghl_log(
+					'Custom field mapping skipped: merge token-like value detected.',
+					array(
+						'form_id'            => (int) $form_id,
+						'form_field_id'      => (int) $field,
+						'field_key'          => $this->get_formidable_field_key( $field ),
+						'raw_saved_value'    => $raw_value,
+						'ghl_destination'    => $destination,
+						'final_payload_value'=> $final_value,
+					)
+				);
+				continue;
+			}
+
+			if ( '' === $final_value ) {
+				aqm_ghl_log(
+					'Custom field mapping skipped: empty saved entry value.',
+					array(
+						'form_id'            => (int) $form_id,
+						'form_field_id'      => (int) $field,
+						'field_key'          => $this->get_formidable_field_key( $field ),
+						'raw_saved_value'    => $raw_value,
+						'ghl_destination'    => $destination,
+						'final_payload_value'=> $final_value,
+					)
+				);
+				continue;
+			}
+
+			$field_payload = array(
+				'value' => $final_value,
+			);
+			$field_payload[ $destination['type'] ] = $destination['value'];
+			$prepared[] = $field_payload;
+
+			aqm_ghl_log(
+				'Custom field mapping prepared.',
+				array(
+					'form_id'            => (int) $form_id,
+					'form_field_id'      => (int) $field,
+					'field_key'          => $this->get_formidable_field_key( $field ),
+					'raw_saved_value'    => $raw_value,
+					'ghl_destination'    => $destination,
+					'final_payload_value'=> $final_value,
+				)
 			);
 		}
 
@@ -360,6 +415,19 @@ class AQM_GHL_Handler {
 				continue;
 			}
 
+			$value = sanitize_text_field( (string) $value );
+			if ( $this->is_merge_token_like_value( $value ) ) {
+				aqm_ghl_log(
+					'UTM injection skipped: merge token-like value detected.',
+					array(
+						'location_id' => $location_id,
+						'param_key'   => $param_key,
+						'value'       => $value,
+					)
+				);
+				continue;
+			}
+
 			// Get the provisioned field ID for this parameter
 			if ( ! isset( $field_mapping[ $param_key ] ) || empty( $field_mapping[ $param_key ] ) ) {
 				aqm_ghl_log(
@@ -392,6 +460,119 @@ class AQM_GHL_Handler {
 		}
 
 		return $payload;
+	}
+
+	/**
+	 * Parse configured destination identifier into a GHL custom field id or key.
+	 *
+	 * @param string $destination Raw destination value from settings.
+	 * @return array{type:string,value:string}
+	 */
+	private function parse_ghl_custom_field_destination( $destination ) {
+		$destination = is_string( $destination ) ? trim( $destination ) : '';
+		if ( '' === $destination ) {
+			return array( 'type' => '', 'value' => '' );
+		}
+
+		// Support mappings configured as {{ contact.some_key }}.
+		if ( preg_match( '/^\{\{\s*contact\.([a-zA-Z0-9_]+)\s*\}\}$/', $destination, $matches ) ) {
+			return array(
+				'type'  => 'key',
+				'value' => sanitize_key( $matches[1] ),
+			);
+		}
+
+		// Support mappings configured as contact.some_key.
+		if ( preg_match( '/^contact\.([a-zA-Z0-9_]+)$/', $destination, $matches ) ) {
+			return array(
+				'type'  => 'key',
+				'value' => sanitize_key( $matches[1] ),
+			);
+		}
+
+		// Default behavior: treat as custom field ID.
+		return array(
+			'type'  => 'id',
+			'value' => sanitize_text_field( $destination ),
+		);
+	}
+
+	/**
+	 * Convert and sanitize Formidable meta value for GHL custom fields.
+	 *
+	 * @param mixed $value Raw saved entry value.
+	 * @return string
+	 */
+	private function sanitize_custom_field_value( $value ) {
+		if ( null === $value ) {
+			return '';
+		}
+
+		if ( is_array( $value ) ) {
+			$flat = array();
+			foreach ( $value as $item ) {
+				if ( is_array( $item ) ) {
+					$item = wp_json_encode( $item );
+				}
+				if ( is_scalar( $item ) ) {
+					$clean = sanitize_text_field( (string) $item );
+					if ( '' !== $clean ) {
+						$flat[] = $clean;
+					}
+				}
+			}
+			return implode( ', ', $flat );
+		}
+
+		if ( ! is_scalar( $value ) ) {
+			return '';
+		}
+
+		return sanitize_text_field( (string) $value );
+	}
+
+	/**
+	 * Detect merge-token / placeholder-like values that should never be sent as payload values.
+	 *
+	 * @param mixed $value Value to inspect.
+	 * @return bool
+	 */
+	private function is_merge_token_like_value( $value ) {
+		if ( ! is_string( $value ) ) {
+			return false;
+		}
+
+		$trimmed = trim( $value );
+		if ( '' === $trimmed ) {
+			return false;
+		}
+
+		if ( preg_match( '/^\{\{\s*contact\.[^}]+\}\}$/i', $trimmed ) ) {
+			return true;
+		}
+
+		return (bool) preg_match( '/^contact\.[a-zA-Z0-9_]+$/i', $trimmed );
+	}
+
+	/**
+	 * Get a Formidable field key from field ID for debug logs.
+	 *
+	 * @param int $field_id Formidable field ID.
+	 * @return string
+	 */
+	private function get_formidable_field_key( $field_id ) {
+		$field_id = absint( $field_id );
+		if ( ! $field_id || ! class_exists( 'FrmField' ) ) {
+			return '';
+		}
+
+		$field = FrmField::getOne( $field_id );
+		if ( ! $field ) {
+			return '';
+		}
+
+		$key = isset( $field->field_key ) ? (string) $field->field_key : '';
+		return sanitize_key( $key );
 	}
 
 }
