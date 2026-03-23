@@ -978,6 +978,8 @@ class AQM_GHL_Admin {
 		$mapping = $provisioner->get_field_mapping( $settings['location_id'], $settings['private_token'], true );
 
 		if ( ! empty( $mapping ) ) {
+			// Keep Formidable hidden-field defaults and mappings in sync after provisioning.
+			$sync = aqm_ghl_sync_ghl_fields_to_forms();
 			wp_send_json_success(
 				array(
 					'message' => sprintf(
@@ -986,6 +988,7 @@ class AQM_GHL_Admin {
 						count( $mapping )
 					),
 					'field_count' => count( $mapping ),
+					'sync'        => $sync,
 				)
 			);
 		} else {

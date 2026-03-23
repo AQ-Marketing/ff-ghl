@@ -80,7 +80,7 @@
 				.addClass('regular-text aqm-ghl-custom-ghl-select');
 			$select.append(new Option(settings.labels.selectGhl || 'Select a GHL field', '', false, false));
 			ghlCustomFields.forEach(function (cf) {
-				const key = cf.fieldKey ? '{{ ' + cf.fieldKey + ' }}' : cf.id;
+				const key = cf.fieldKey ? cf.fieldKey : cf.id;
 				const label = cf.name + ' — ' + key;
 				const isSelected = selectedId && selectedId === cf.id;
 				$select.append(new Option(label, cf.id, isSelected, isSelected));
@@ -523,6 +523,11 @@
 						let message = json.data.message || 'Fields provisioned successfully.';
 						if (json.data.field_count) {
 							message += ' (' + json.data.field_count + ' fields)';
+						}
+						if (json.data.sync) {
+							if (json.data.sync.created) message += ' Created ' + json.data.sync.created + ' hidden fields.';
+							if (json.data.sync.updated) message += ' Updated ' + json.data.sync.updated + ' hidden defaults.';
+							if (json.data.sync.mapped) message += ' Auto-mapped ' + json.data.sync.mapped + ' fields.';
 						}
 						$result
 							.addClass('notice-success')
