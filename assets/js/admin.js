@@ -215,11 +215,29 @@
 						<select name="${settings.optionKey || 'aqm_ghl_connector_settings'}[mapping][${formIdInt}][last_name]" class="regular-text aqm-ghl-field-select" data-map-key="last_name"></select>
 					</label>
 				</div>
-				<h4>Custom Fields</h4>
-				<div class="aqm-ghl-custom-fields"></div>
-				<p><button type="button" class="button aqm-ghl-add-custom-field" data-form-id="${formIdInt}">Add Custom Field</button></p>
+				<div class="aqm-ghl-custom-fields-panel">
+					<button type="button" class="aqm-ghl-custom-fields-toggle" aria-expanded="false" aria-controls="aqm-ghl-cf-inner-${formIdInt}">
+						<span class="aqm-ghl-custom-fields-caret" aria-hidden="true">▶</span>
+						<span class="aqm-ghl-custom-fields-toggle-label">Custom Fields</span>
+					</button>
+					<div class="aqm-ghl-custom-fields-inner" id="aqm-ghl-cf-inner-${formIdInt}" hidden>
+						<div class="aqm-ghl-custom-fields"></div>
+						<p><button type="button" class="button aqm-ghl-add-custom-field" data-form-id="${formIdInt}">Add Custom Field</button></p>
+					</div>
+				</div>
 			</div>
 		`);
+
+		container.on('click', '.aqm-ghl-custom-fields-toggle', function (e) {
+			e.preventDefault();
+			const $btn = $(this);
+			const $panel = $btn.closest('.aqm-ghl-custom-fields-panel');
+			const $inner = $panel.find('.aqm-ghl-custom-fields-inner');
+			const open = $btn.attr('aria-expanded') === 'true';
+			$btn.attr('aria-expanded', open ? 'false' : 'true');
+			$inner.prop('hidden', open);
+			$btn.find('.aqm-ghl-custom-fields-caret').text(open ? '▶' : '▼');
+		});
 
 		loadFields(formIdInt)
 			.then((fields) => {
