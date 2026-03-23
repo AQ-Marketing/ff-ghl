@@ -112,10 +112,10 @@ class AQM_GHL_Handler {
 		$map_all = isset( $settings['mapping'] ) ? $settings['mapping'] : array();
 		$map     = isset( $map_all[ $form_id ] ) ? $map_all[ $form_id ] : array();
 
-		$email      = $this->get_meta_value( $metas, isset( $map['email'] ) ? $map['email'] : 0 );
-		$raw_phone  = $this->get_meta_value( $metas, isset( $map['phone'] ) ? $map['phone'] : 0 );
-		$first_name = $this->get_meta_value( $metas, isset( $map['first_name'] ) ? $map['first_name'] : 0 );
-		$last_name  = $this->get_meta_value( $metas, isset( $map['last_name'] ) ? $map['last_name'] : 0 );
+		$email      = $this->resolve_frm_get_stored_value( $this->get_meta_value( $metas, isset( $map['email'] ) ? $map['email'] : 0 ) );
+		$raw_phone  = $this->resolve_frm_get_stored_value( $this->get_meta_value( $metas, isset( $map['phone'] ) ? $map['phone'] : 0 ) );
+		$first_name = $this->resolve_frm_get_stored_value( $this->get_meta_value( $metas, isset( $map['first_name'] ) ? $map['first_name'] : 0 ) );
+		$last_name  = $this->resolve_frm_get_stored_value( $this->get_meta_value( $metas, isset( $map['last_name'] ) ? $map['last_name'] : 0 ) );
 
 		$phone = aqm_ghl_normalize_phone( $raw_phone );
 
@@ -296,6 +296,7 @@ class AQM_GHL_Handler {
 			}
 
 			$raw_value   = $this->get_meta_value( $metas, $field );
+			$raw_value   = $this->resolve_frm_get_stored_value( $raw_value );
 			$final_value = $this->sanitize_custom_field_value( $raw_value );
 
 			// Never send literal merge tags / placeholders as custom field values.
@@ -365,6 +366,104 @@ class AQM_GHL_Handler {
 		}
 
 		return isset( $metas[ $field_id ] ) ? $metas[ $field_id ] : null;
+	}
+
+	/**
+	 * When Formidable saves a default like [frm_get param="ad_name"] as literal text in entry meta,
+	 * resolve it from the current request query string (same request as frm_after_create_entry).
+	 *
+	 * @param mixed $value Raw meta value (string or array).
+	 * @return mixed Resolved value or original if not a frm_get shortcode.
+	 */
+	private function resolve_frm_get_stored_value( $value ) {
+		if ( is_array( $value ) ) {
+			return array_map( array( $this, 'resolve_frm_get_stored_value' ), $value );
+		}
+
+		if ( ! is_string( $value ) ) {
+			return $value;
+		}
+
+		$trimmed = trim( $value );
+		if ( '' === $trimmed ) {
+			return $value;
+		}
+
+		// Whole value is a Formidable frm_get / frm-get shortcode (optional extra attributes before ]).
+		if ( ! preg_match( '/^\[\s*(frm_get|frm-get)\b/i', $trimmed ) || ! preg_match( '/\]$/', $trimmed ) ) {
+			return $value;
+		}
+
+		if ( ! preg_match( '/\bparam\s*=\s*(["\']?)([a-zA-Z0-9_-]+)\1/i', $trimmed, $m ) ) {
+			return $value;
+		}
+
+		$param = $m[2];
+		$resolved = $this->lookup_request_query_param( $param );
+
+		if ( '' !== $resolved ) {
+			aqm_ghl_log(
+				'Resolved frm_get shortcode from URL for GHL payload.',
+				array(
+					'param'   => $param,
+					'preview' => is_string( $resolved ) ? substr( $resolved, 0, 120 ) : '',
+				)
+			);
+			return $resolved;
+		}
+
+		// Let Formidable render the shortcode if registered (covers edge cases).
+		if ( function_exists( 'do_shortcode' ) ) {
+			$rendered = do_shortcode( $trimmed );
+			if ( is_string( $rendered ) && $rendered !== $trimmed && '' !== trim( $rendered ) ) {
+				aqm_ghl_log(
+					'Resolved frm_get via do_shortcode for GHL payload.',
+					array( 'param' => $param )
+				);
+				return $rendered;
+			}
+		}
+
+		aqm_ghl_log(
+			'frm_get shortcode in entry meta but URL param empty; sending empty for GHL.',
+			array( 'param' => $param )
+		);
+
+		return '';
+	}
+
+	/**
+	 * Read a query parameter from the current request (GET then REQUEST, case-insensitive key).
+	 *
+	 * @param string $param Parameter name from shortcode.
+	 * @return string Raw string (not sanitized); caller sanitizes.
+	 */
+	private function lookup_request_query_param( $param ) {
+		$param = (string) $param;
+		if ( '' === $param ) {
+			return '';
+		}
+
+		$sources = array();
+		if ( ! empty( $_GET ) && is_array( $_GET ) ) {
+			$sources[] = wp_unslash( $_GET );
+		}
+		if ( ! empty( $_REQUEST ) && is_array( $_REQUEST ) ) {
+			$sources[] = wp_unslash( $_REQUEST );
+		}
+
+		foreach ( $sources as $bag ) {
+			if ( isset( $bag[ $param ] ) && ! is_array( $bag[ $param ] ) ) {
+				return (string) $bag[ $param ];
+			}
+			foreach ( $bag as $key => $val ) {
+				if ( is_string( $key ) && strcasecmp( $key, $param ) === 0 && ! is_array( $val ) ) {
+					return (string) $val;
+				}
+			}
+		}
+
+		return '';
 	}
 
 	/**
