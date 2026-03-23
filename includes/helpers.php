@@ -561,7 +561,7 @@ if ( ! function_exists( 'aqm_ghl_get_cached_ghl_custom_fields' ) ) {
 if ( ! function_exists( 'aqm_ghl_sync_ghl_fields_to_forms' ) ) {
 	/**
 	 * Create hidden fields in selected Formidable forms for each GHL custom field
-	 * and set the Default Value to the GHL fieldKey (e.g. {{ contact.utm_source }}).
+	 * and set the Default Value to Formidable URL shortcode (e.g. [frm_get param="utm_source"]).
 	 * Also auto-maps the new fields in plugin settings.
 	 *
 	 * @return array Summary with created/updated counts.
@@ -642,14 +642,29 @@ if ( ! function_exists( 'aqm_ghl_sync_ghl_fields_to_forms' ) ) {
 					continue;
 				}
 
-				$default_val = '{{ ' . $ghl['fieldKey'] . ' }}';
+				$field_key_raw = (string) $ghl['fieldKey']; // e.g. contact.utm_source
+				$field_key_parts = explode( '.', $field_key_raw );
+				$query_param_key = sanitize_key( end( $field_key_parts ) ); // e.g. utm_source
+				if ( '' === $query_param_key ) {
+					continue;
+				}
+
+				$default_val_legacy = '{{ ' . $field_key_raw . ' }}';
+				$default_val        = '[frm_get param="' . $query_param_key . '"]';
 				$default_key = strtolower( $default_val );
+				$legacy_key  = strtolower( $default_val_legacy );
 				$label_key   = strtolower( trim( $ghl['name'] ) );
 				$frm_field_id = null;
 
-				// 1. Field with this default value already exists.
+				// 1. Field with the new shortcode default exists.
 				if ( isset( $by_default[ $default_key ] ) ) {
 					$frm_field_id = (int) $by_default[ $default_key ]->id;
+				}
+				// 1b. Field with old merge-token default exists - migrate it.
+				elseif ( isset( $by_default[ $legacy_key ] ) ) {
+					$frm_field_id = (int) $by_default[ $legacy_key ]->id;
+					FrmField::update( $frm_field_id, array( 'default_value' => $default_val ) );
+					$updated_count++;
 				}
 				// 2. Field with matching label exists — update its default value.
 				elseif ( isset( $by_label[ $label_key ] ) ) {
