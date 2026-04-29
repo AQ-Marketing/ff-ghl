@@ -63,6 +63,9 @@ class AQM_GHL_Admin {
 			return;
 		}
 
+		$_diag = function_exists( 'aqm_ghl_diag_log' );
+		if ( $_diag ) { aqm_ghl_diag_log( 'enqueue_assets: ENTER (hook=' . $hook . ')' ); }
+
 		wp_enqueue_style(
 			'aqm-ghl-admin',
 			AQM_GHL_CONNECTOR_URL . 'assets/css/admin.css',
@@ -78,18 +81,27 @@ class AQM_GHL_Admin {
 			true
 		);
 
-		// Sync no longer runs on every page load — it OOMs on sites with many forms × GHL fields.
-		// Use the "Refresh GHL Fields" button on the settings page to trigger it explicitly.
+		if ( $_diag ) { aqm_ghl_diag_log( 'enqueue_assets: after wp_enqueue_style/script' ); }
 
 		$current_settings = aqm_ghl_get_settings();
-		$forms            = aqm_ghl_get_formidable_forms();
-		$form_options     = array();
+		if ( $_diag ) {
+			$opt_size = strlen( wp_json_encode( $current_settings ) );
+			$cf_count = isset( $current_settings['custom_fields'] ) && is_array( $current_settings['custom_fields'] ) ? count( $current_settings['custom_fields'], COUNT_RECURSIVE ) : 0;
+			$loc_count = isset( $current_settings['locations'] ) && is_array( $current_settings['locations'] ) ? count( $current_settings['locations'] ) : 0;
+			aqm_ghl_diag_log( 'enqueue_assets: got settings (json_size=' . $opt_size . 'B custom_fields_recursive=' . $cf_count . ' locations=' . $loc_count . ')' );
+		}
+
+		$forms = aqm_ghl_get_formidable_forms();
+		if ( $_diag ) { aqm_ghl_diag_log( 'enqueue_assets: got forms (count=' . count( $forms ) . ')' ); }
+
+		$form_options = array();
 		foreach ( $forms as $form ) {
 			$form_options[] = array(
 				'id'   => (int) $form->id,
 				'name' => $form->name,
 			);
 		}
+		if ( $_diag ) { aqm_ghl_diag_log( 'enqueue_assets: built form_options' ); }
 
 		// Normalize mapping keys to integers for consistent JavaScript access
 		$mapping_normalized = array();
@@ -99,6 +111,7 @@ class AQM_GHL_Admin {
 				$mapping_normalized[ $fid_int ] = $map;
 			}
 		}
+		if ( $_diag ) { aqm_ghl_diag_log( 'enqueue_assets: normalized mapping (count=' . count( $mapping_normalized ) . ')' ); }
 
 		// Normalize custom fields keys to integers
 		$custom_fields_normalized = array();
@@ -108,6 +121,10 @@ class AQM_GHL_Admin {
 				$custom_fields_normalized[ $fid_int ] = $fields;
 			}
 		}
+		if ( $_diag ) { aqm_ghl_diag_log( 'enqueue_assets: normalized custom_fields (count=' . count( $custom_fields_normalized ) . ')' ); }
+
+		$ghl_cached = aqm_ghl_get_cached_ghl_custom_fields();
+		if ( $_diag ) { aqm_ghl_diag_log( 'enqueue_assets: got ghl_cached (count=' . ( is_array( $ghl_cached ) ? count( $ghl_cached ) : -1 ) . ')' ); }
 
 		wp_localize_script(
 			'aqm-ghl-admin',
@@ -118,7 +135,7 @@ class AQM_GHL_Admin {
 				'selectedForms' => isset( $current_settings['form_ids'] ) && is_array( $current_settings['form_ids'] ) ? array_map( 'absint', $current_settings['form_ids'] ) : array(),
 				'mapping'       => $mapping_normalized,
 				'customFields'  => $custom_fields_normalized,
-				'ghlFields'     => aqm_ghl_get_cached_ghl_custom_fields(),
+				'ghlFields'     => $ghl_cached,
 				'forms'         => $form_options,
 				'optionKey'     => AQM_GHL_OPTION_KEY,
 				'labels'        => array(
@@ -128,6 +145,7 @@ class AQM_GHL_Admin {
 				),
 			)
 		);
+		if ( $_diag ) { aqm_ghl_diag_log( 'enqueue_assets: EXIT' ); }
 	}
 
 	/**
