@@ -63,6 +63,8 @@ class AQM_GHL_Admin {
 			return;
 		}
 
+		if ( function_exists( 'aqm_ghl_diag_log' ) ) { aqm_ghl_diag_log( 'enqueue_assets: enter (hook=' . $hook . ')' ); }
+
 		wp_enqueue_style(
 			'aqm-ghl-admin',
 			AQM_GHL_CONNECTOR_URL . 'assets/css/admin.css',
@@ -78,11 +80,14 @@ class AQM_GHL_Admin {
 			true
 		);
 
+		if ( function_exists( 'aqm_ghl_diag_log' ) ) { aqm_ghl_diag_log( 'enqueue_assets: before sync_ghl_fields_to_forms' ); }
 		// Auto-sync GHL fields → Formidable hidden fields on page load.
 		aqm_ghl_sync_ghl_fields_to_forms();
+		if ( function_exists( 'aqm_ghl_diag_log' ) ) { aqm_ghl_diag_log( 'enqueue_assets: after sync_ghl_fields_to_forms' ); }
 
 		$current_settings = aqm_ghl_get_settings();
 		$forms            = aqm_ghl_get_formidable_forms();
+		if ( function_exists( 'aqm_ghl_diag_log' ) ) { aqm_ghl_diag_log( 'enqueue_assets: got settings + forms (forms=' . count( $forms ) . ')' ); }
 		$form_options     = array();
 		foreach ( $forms as $form ) {
 			$form_options[] = array(
@@ -109,6 +114,7 @@ class AQM_GHL_Admin {
 			}
 		}
 
+		if ( function_exists( 'aqm_ghl_diag_log' ) ) { aqm_ghl_diag_log( 'enqueue_assets: before wp_localize_script (ghl_fields=' . count( aqm_ghl_get_cached_ghl_custom_fields() ) . ')' ); }
 		wp_localize_script(
 			'aqm-ghl-admin',
 			'aqmGhlSettings',
@@ -128,12 +134,14 @@ class AQM_GHL_Admin {
 				),
 			)
 		);
+		if ( function_exists( 'aqm_ghl_diag_log' ) ) { aqm_ghl_diag_log( 'enqueue_assets: complete' ); }
 	}
 
 	/**
 	 * Render settings page.
 	 */
 	public function render_settings_page() {
+		if ( function_exists( 'aqm_ghl_diag_log' ) ) { aqm_ghl_diag_log( 'render_settings_page: enter' ); }
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
 		}
@@ -142,6 +150,7 @@ class AQM_GHL_Admin {
 		// instead of letting WP show the generic critical-error screen.
 		try {
 			$this->render_settings_page_inner();
+			if ( function_exists( 'aqm_ghl_diag_log' ) ) { aqm_ghl_diag_log( 'render_settings_page: inner returned ok' ); }
 		} catch ( \Throwable $e ) {
 			echo '<div class="wrap"><h1>AQM GHL Connector — diagnostic</h1>';
 			echo '<div class="notice notice-error"><p><strong>Caught exception while rendering settings page</strong></p>';
