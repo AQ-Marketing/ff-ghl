@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AQM GHL Formidable Connector
  * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts using a Private Integration token.
- * Version: 1.8.8
+ * Version: 1.8.9
  * Author: AQMarketing
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'AQM_GHL_CONNECTOR_VERSION', '1.8.8' );
+define( 'AQM_GHL_CONNECTOR_VERSION', '1.8.9' );
 define( 'AQM_GHL_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AQM_GHL_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 define( 'AQM_GHL_OPTION_KEY', 'aqm_ghl_connector_settings' );
@@ -64,26 +64,22 @@ if ( is_admin() && function_exists( 'add_action' ) ) {
 		if ( ! $wpdb ) {
 			return;
 		}
-		$row = $wpdb->get_row(
+		// Query ONLY the length — never fetch the value (it's the OOM trigger).
+		$size = (int) $wpdb->get_var(
 			$wpdb->prepare(
-				"SELECT LENGTH(option_value) AS sz, option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
+				"SELECT LENGTH(option_value) FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
 				'aqm_ghl_connector_settings'
 			)
 		);
-		if ( ! $row ) {
-			return;
-		}
-		$size = (int) $row->sz;
-		$too_big = $size > 1048576; // 1 MB threshold
 
-		if ( ! $too_big && empty( $_GET['aqm_ghl_emergency_reset'] ) ) {
+		if ( $size <= 1048576 && empty( $_GET['aqm_ghl_emergency_reset'] ) ) {
 			return;
 		}
 
-		// Try to extract the small/safe fields without unserializing the whole thing.
-		// PHP's serialize format keeps everything as a single nested s:N:"..." structure;
-		// we can regex out the simple scalar keys we care about, since they're tiny.
-		$raw = $row->option_value;
+		// Try to extract small scalars (location_id, private_token, tags) using the index
+		// trick: SUBSTRING the option_value around the position where each key appears.
+		// LOCATE() returns the byte offset; we read at most 4KB after the key — never
+		// pulls the bloated array fields into memory.
 		$kept = array(
 			'location_id'    => '',
 			'private_token'  => '',
@@ -96,7 +92,15 @@ if ( is_admin() && function_exists( 'add_action' ) ) {
 		);
 
 		foreach ( array( 'location_id', 'private_token', 'tags' ) as $key ) {
-			if ( preg_match( '/s:\d+:"' . preg_quote( $key, '/' ) . '";s:(\d+):"((?:\\\\.|[^"\\\\]){0,2048})"/', $raw, $m ) ) {
+			$needle = 's:' . strlen( $key ) . ':"' . $key . '";';
+			$snippet = $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT SUBSTRING(option_value, LOCATE(%s, option_value), 4096) FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
+					$needle,
+					'aqm_ghl_connector_settings'
+				)
+			);
+			if ( $snippet && preg_match( '/s:\d+:"' . preg_quote( $key, '/' ) . '";s:(\d+):"((?:[^"\\\\]|\\\\.){0,2048})"/', $snippet, $m ) ) {
 				$kept[ $key ] = $m[2];
 			}
 		}
@@ -110,7 +114,7 @@ if ( is_admin() && function_exists( 'add_action' ) ) {
 		wp_cache_delete( 'alloptions', 'options' );
 
 		if ( function_exists( 'aqm_ghl_diag_log' ) ) {
-			aqm_ghl_diag_log( sprintf( 'EMERGENCY RESET: option was %d bytes; preserved location_id+private_token+tags only', $size ) );
+			aqm_ghl_diag_log( sprintf( 'EMERGENCY RESET: option was %d bytes; preserved location_id+private_token+tags', $size ) );
 		}
 	}, 1 );
 }
