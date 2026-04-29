@@ -23,13 +23,35 @@ if ( ! function_exists( 'aqm_ghl_get_settings' ) ) {
 			'enable_logging' => false,
 		);
 
+		// Recursion guard — aqm_ghl_log() calls aqm_ghl_is_logging_enabled() which
+		// calls back here. If a hosting environment's object cache doesn't reflect
+		// our update_option() write before the recursive read (Pressable, sites with
+		// pre_option_* filters, etc.), the migration block below would re-fire on
+		// every recursive call and OOM the request.
+		static $in_progress = false;
+		if ( $in_progress ) {
+			$cached = get_option( AQM_GHL_OPTION_KEY, array() );
+			return wp_parse_args( is_array( $cached ) ? $cached : array(), $defaults );
+		}
+		$in_progress = true;
+
 		$settings = get_option( AQM_GHL_OPTION_KEY, array() );
-		
-		// Migrate old single-location settings to new multi-location format
-		if ( ! empty( $settings['location_id'] ) && empty( $settings['locations'] ) ) {
+		if ( ! is_array( $settings ) ) {
+			$settings = array();
+		}
+
+		// Migrate old single-location settings to new multi-location format.
+		// The `_migrated_to_multi_location` flag short-circuits re-migration even
+		// when the persisted `locations` value can't be read back (cache layer
+		// issues, filtered get_option, etc.).
+		if (
+			empty( $settings['_migrated_to_multi_location'] )
+			&& ! empty( $settings['location_id'] )
+			&& empty( $settings['locations'] )
+		) {
 			$settings = aqm_ghl_migrate_to_multi_location( $settings );
 		}
-		
+
 		// Migrate old form_id (singular) to form_ids (plural array)
 		if ( ! empty( $settings['form_id'] ) && empty( $settings['form_ids'] ) ) {
 			$settings['form_ids'] = array( absint( $settings['form_id'] ) );
@@ -37,7 +59,8 @@ if ( ! function_exists( 'aqm_ghl_get_settings' ) ) {
 			update_option( AQM_GHL_OPTION_KEY, $settings );
 		}
 
-		return wp_parse_args( is_array( $settings ) ? $settings : array(), $defaults );
+		$in_progress = false;
+		return wp_parse_args( $settings, $defaults );
 	}
 }
 
@@ -67,10 +90,10 @@ if ( ! function_exists( 'aqm_ghl_migrate_to_multi_location' ) ) {
 		// Keep legacy fields for backwards compatibility but mark as migrated
 		$settings['_migrated_to_multi_location'] = true;
 
-		// Save migrated settings
+		// Save migrated settings. Do NOT call aqm_ghl_log() here — it goes through
+		// aqm_ghl_is_logging_enabled() → aqm_ghl_get_settings(), which would recurse
+		// into this migration if a hosting cache layer doesn't reflect the write.
 		update_option( AQM_GHL_OPTION_KEY, $settings );
-
-		aqm_ghl_log( 'Migrated single-location settings to multi-location format.' );
 
 		return $settings;
 	}
