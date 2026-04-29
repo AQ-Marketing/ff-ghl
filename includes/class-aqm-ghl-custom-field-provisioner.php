@@ -316,15 +316,13 @@ class AQM_GHL_Custom_Field_Provisioner {
 		$body = wp_remote_retrieve_body( $response );
 		$data = json_decode( $body, true );
 
-		// Log the response for debugging
+		// Log only structural info — never raw API response bodies (may echo back token-bound metadata).
 		aqm_ghl_log(
 			'Custom field provisioner: Create field API response.',
 			array(
-				'location_id' => $location_id,
 				'field_name'  => $field_data['name'],
 				'status_code' => $code,
-				'response_body' => $body,
-				'parsed_data' => $data,
+				'has_id'      => is_array( $data ) && ! empty( $data['id'] ),
 			)
 		);
 

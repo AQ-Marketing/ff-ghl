@@ -57,6 +57,12 @@ class AQM_GHL_Admin {
 	 * @param string $hook Current admin page hook.
 	 */
 	public function enqueue_assets( $hook ) {
+		// Only load on the plugin's settings page — prevents broadcasting nonces,
+		// GHL field metadata, and form lists to every admin page.
+		if ( ! is_string( $hook ) || strpos( $hook, 'aqm-ghl-connector' ) === false ) {
+			return;
+		}
+
 		wp_enqueue_style(
 			'aqm-ghl-admin',
 			AQM_GHL_CONNECTOR_URL . 'assets/css/admin.css',
@@ -216,7 +222,7 @@ class AQM_GHL_Admin {
 												printf(
 													/* translators: 1: form name, 2: form ID */
 													esc_html__( '%1$s (ID: %2$d)', 'aqm-ghl' ),
-													$form->name,
+													esc_html( $form->name ),
 													(int) $form->id
 												);
 												?>
@@ -256,17 +262,6 @@ class AQM_GHL_Admin {
 						</td>
 					</tr>
 					<tr>
-						<th scope="row"><label for="aqm-ghl-github-token"><?php esc_html_e( 'GitHub Token (Optional)', 'aqm-ghl' ); ?></label></th>
-						<td>
-							<input name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[github_token]" id="aqm-ghl-github-token" type="password" value="" placeholder="••••••••" class="regular-text" autocomplete="new-password" />
-							<p class="description">
-								<?php esc_html_e( 'GitHub Personal Access Token for private repository updates. Leave blank to keep current token. Required if repository is private. Create token at: ', 'aqm-ghl' ); ?>
-								<a href="https://github.com/settings/tokens" target="_blank">https://github.com/settings/tokens</a>
-								<?php esc_html_e( ' (needs "repo" scope)', 'aqm-ghl' ); ?>
-							</p>
-						</td>
-					</tr>
-					<tr>
 						<th scope="row"><label for="aqm-ghl-logging"><?php esc_html_e( 'Enable logging', 'aqm-ghl' ); ?></label></th>
 						<td>
 							<label>
@@ -285,20 +280,17 @@ class AQM_GHL_Admin {
 				<div id="aqm-ghl-test-result" class="notice inline" style="display:none;"></div>
 
 				<h2><?php esc_html_e( 'Update Management', 'aqm-ghl' ); ?></h2>
-				<p><?php esc_html_e( 'If you uploaded files via FTP and WordPress is not detecting updates from GitHub, clear the update cache.', 'aqm-ghl' ); ?></p>
+				<p><?php esc_html_e( 'Updates are pulled from a public release feed. If a new version is not appearing, clear the update cache.', 'aqm-ghl' ); ?></p>
 				<p>
 					<button type="button" class="button button-secondary" id="aqm-ghl-clear-cache"><?php esc_html_e( 'Clear Update Cache', 'aqm-ghl' ); ?></button>
 					<span id="aqm-ghl-cache-result" class="notice inline" style="display:none; margin-left: 10px;"></span>
 				</p>
 				<p class="description">
 					<?php
-					$current_version = AQM_GHL_CONNECTOR_VERSION;
-					$github_token_set = ! empty( $settings['github_token'] ) || ( defined( 'AQM_GHL_GITHUB_TOKEN' ) && ! empty( AQM_GHL_GITHUB_TOKEN ) );
 					printf(
-						/* translators: 1: current version, 2: token status */
-						esc_html__( 'Current version: %1$s | GitHub token: %2$s', 'aqm-ghl' ),
-						esc_html( $current_version ),
-						$github_token_set ? '<span style="color: green;">✓ Configured</span>' : '<span style="color: orange;">⚠ Not configured (required if repository is private)</span>'
+						/* translators: %s: current version */
+						esc_html__( 'Current version: %s', 'aqm-ghl' ),
+						esc_html( AQM_GHL_CONNECTOR_VERSION )
 					);
 					?>
 				</p>
@@ -417,19 +409,19 @@ class AQM_GHL_Admin {
 		// Single location configuration (simplified from multi-location)
 		$sanitized['location_id'] = isset( $input['location_id'] ) ? sanitize_text_field( $input['location_id'] ) : '';
 
-		// Private token: use raw option when preserving so UI updates are never lost
-		$token = isset( $input['private_token'] ) ? trim( (string) wp_unslash( $input['private_token'] ) ) : '';
+		// Tokens are opaque secrets; strip tags + trim but preserve all other characters.
+		$token = isset( $input['private_token'] ) ? trim( wp_strip_all_tags( (string) wp_unslash( $input['private_token'] ) ) ) : '';
 		if ( '' === $token ) {
 			$sanitized['private_token'] = isset( $raw_existing['private_token'] ) && is_string( $raw_existing['private_token'] ) ? $raw_existing['private_token'] : '';
 		} else {
-			$sanitized['private_token'] = sanitize_text_field( $token );
+			$sanitized['private_token'] = $token;
 		}
 
-		$github_token = isset( $input['github_token'] ) ? trim( wp_unslash( $input['github_token'] ) ) : '';
+		$github_token = isset( $input['github_token'] ) ? trim( wp_strip_all_tags( (string) wp_unslash( $input['github_token'] ) ) ) : '';
 		if ( '' === $github_token ) {
 			$sanitized['github_token'] = isset( $raw_existing['github_token'] ) && is_string( $raw_existing['github_token'] ) ? $raw_existing['github_token'] : '';
 		} else {
-			$sanitized['github_token'] = sanitize_text_field( $github_token );
+			$sanitized['github_token'] = $github_token;
 		}
 
 		// Handle form_ids - can be array or empty
@@ -688,14 +680,12 @@ class AQM_GHL_Admin {
 			}
 		}
 		
-		// Log field mapping for debugging
+		// Log field mapping for debugging — omit raw API response bodies (may echo back token-bound data).
 		aqm_ghl_log(
 			'Test contact: Field mapping retrieved after provisioning.',
 			array(
-				'location_id' => $settings['location_id'],
-				'field_mapping' => $field_mapping,
-				'mapping_count' => count( $field_mapping ),
-				'provisioning_errors' => $provisioning_errors,
+				'mapping_count'             => count( $field_mapping ),
+				'provisioning_error_count'  => count( $provisioning_errors ),
 			)
 		);
 		

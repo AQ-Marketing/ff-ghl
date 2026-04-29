@@ -768,8 +768,14 @@ if ( ! function_exists( 'aqm_ghl_import_settings_data' ) ) {
 		$existing = get_option( AQM_GHL_OPTION_KEY, array() );
 		$existing = is_array( $existing ) ? $existing : array();
 
-		// Sanitize known string keys
-		$string_keys = array( 'location_id', 'private_token', 'tags', 'github_token' );
+		// Sanitize known string keys. Tokens use strip-tags-only; other strings get full sanitize.
+		$token_keys  = array( 'private_token', 'github_token' );
+		$string_keys = array( 'location_id', 'tags' );
+		foreach ( $token_keys as $key ) {
+			if ( array_key_exists( $key, $settings ) ) {
+				$existing[ $key ] = is_string( $settings[ $key ] ) ? trim( wp_strip_all_tags( $settings[ $key ] ) ) : '';
+			}
+		}
 		foreach ( $string_keys as $key ) {
 			if ( array_key_exists( $key, $settings ) ) {
 				$existing[ $key ] = is_string( $settings[ $key ] ) ? sanitize_text_field( $settings[ $key ] ) : '';
@@ -785,13 +791,65 @@ if ( ! function_exists( 'aqm_ghl_import_settings_data' ) ) {
 			$existing['form_id'] = absint( $settings['form_id'] );
 		}
 		if ( array_key_exists( 'mapping', $settings ) && is_array( $settings['mapping'] ) ) {
-			$existing['mapping'] = $settings['mapping'];
+			$clean_mapping = array();
+			$mapping_count = 0;
+			foreach ( $settings['mapping'] as $fid => $map ) {
+				if ( $mapping_count++ > 200 || ! is_array( $map ) ) {
+					continue;
+				}
+				$fid_int = absint( $fid );
+				if ( ! $fid_int ) {
+					continue;
+				}
+				$clean_mapping[ $fid_int ] = array();
+				foreach ( $map as $key => $value ) {
+					$clean_key = sanitize_key( (string) $key );
+					if ( '' === $clean_key ) {
+						continue;
+					}
+					$clean_mapping[ $fid_int ][ $clean_key ] = is_scalar( $value ) ? absint( $value ) : 0;
+				}
+			}
+			$existing['mapping'] = $clean_mapping;
 		}
 		if ( array_key_exists( 'custom_fields', $settings ) && is_array( $settings['custom_fields'] ) ) {
-			$existing['custom_fields'] = $settings['custom_fields'];
+			$clean_custom = array();
+			$cf_count = 0;
+			foreach ( $settings['custom_fields'] as $fid => $rows ) {
+				if ( $cf_count++ > 200 || ! is_array( $rows ) ) {
+					continue;
+				}
+				$fid_int = absint( $fid );
+				if ( ! $fid_int ) {
+					continue;
+				}
+				$clean_custom[ $fid_int ] = array();
+				foreach ( $rows as $row ) {
+					if ( ! is_array( $row ) ) {
+						continue;
+					}
+					$clean_custom[ $fid_int ][] = array(
+						'form_field_id' => isset( $row['form_field_id'] ) ? absint( $row['form_field_id'] ) : 0,
+						'ghl_field_id'  => isset( $row['ghl_field_id'] ) ? sanitize_text_field( (string) $row['ghl_field_id'] ) : '',
+					);
+				}
+			}
+			$existing['custom_fields'] = $clean_custom;
 		}
 		if ( array_key_exists( 'locations', $settings ) && is_array( $settings['locations'] ) ) {
-			$existing['locations'] = $settings['locations'];
+			$clean_locations = array();
+			$loc_count = 0;
+			foreach ( $settings['locations'] as $loc ) {
+				if ( $loc_count++ > 50 || ! is_array( $loc ) ) {
+					continue;
+				}
+				$clean_locations[] = array(
+					'location_id'   => isset( $loc['location_id'] ) ? sanitize_text_field( (string) $loc['location_id'] ) : '',
+					'private_token' => isset( $loc['private_token'] ) ? trim( wp_strip_all_tags( (string) $loc['private_token'] ) ) : '',
+					'label'         => isset( $loc['label'] ) ? sanitize_text_field( (string) $loc['label'] ) : '',
+				);
+			}
+			$existing['locations'] = $clean_locations;
 		}
 
 		update_option( AQM_GHL_OPTION_KEY, $existing, false );

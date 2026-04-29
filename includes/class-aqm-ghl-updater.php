@@ -93,30 +93,9 @@ class AQM_GHL_Updater {
 		add_action( 'admin_init', array( $this, 'force_refresh_on_plugins_page' ) );
 		add_filter( 'http_request_args', array( $this, 'add_auth_to_download' ), 10, 2 );
 		
-		// Add admin action to clear cache
-		add_action( 'admin_post_aqm_ghl_clear_update_cache', array( $this, 'clear_cache_action' ) );
 	}
-	
-	/**
-	 * Clear update cache (admin action handler)
-	 */
-	public function clear_cache_action() {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( 'Unauthorized' );
-		}
-		
-		check_admin_referer( 'aqm_ghl_clear_cache' );
-		
-		$cache_key = 'aqm_ghl_github_data_' . md5( $this->username . $this->repository );
-		delete_transient( $cache_key );
-		delete_option( '_transient_' . $cache_key );
-		delete_option( '_transient_timeout_' . $cache_key );
-		delete_site_transient( 'update_plugins' );
-		
-		wp_redirect( admin_url( 'plugins.php?aqm_ghl_cache_cleared=1' ) );
-		exit;
-	}
-	
+
+
 	/**
 	 * Clear update cache (public method)
 	 */

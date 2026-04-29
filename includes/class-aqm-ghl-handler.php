@@ -117,6 +117,11 @@ class AQM_GHL_Handler {
 		$first_name = $this->resolve_frm_get_stored_value( $this->get_meta_value( $metas, isset( $map['first_name'] ) ? $map['first_name'] : 0 ) );
 		$last_name  = $this->resolve_frm_get_stored_value( $this->get_meta_value( $metas, isset( $map['last_name'] ) ? $map['last_name'] : 0 ) );
 
+		// Defense-in-depth: resolve_frm_get_stored_value can return raw URL-query data.
+		$email      = is_array( $email )      ? sanitize_email( (string) reset( $email ) )         : sanitize_email( (string) $email );
+		$first_name = is_array( $first_name ) ? sanitize_text_field( (string) reset( $first_name ) ) : sanitize_text_field( (string) $first_name );
+		$last_name  = is_array( $last_name )  ? sanitize_text_field( (string) reset( $last_name ) )  : sanitize_text_field( (string) $last_name );
+
 		$phone = aqm_ghl_normalize_phone( $raw_phone );
 
 		if ( empty( $email ) && empty( $phone ) ) {
@@ -148,10 +153,10 @@ class AQM_GHL_Handler {
 
 		$payload = array(
 			'locationId' => $settings['location_id'],
-			'email'      => is_array( $email ) ? reset( $email ) : $email,
+			'email'      => $email,
 			'phone'      => $phone,
-			'firstName'  => is_array( $first_name ) ? reset( $first_name ) : $first_name,
-			'lastName'   => is_array( $last_name ) ? reset( $last_name ) : $last_name,
+			'firstName'  => $first_name,
+			'lastName'   => $last_name,
 		);
 
 		if ( ! empty( $settings['tags'] ) ) {
@@ -402,11 +407,12 @@ class AQM_GHL_Handler {
 		$resolved = $this->lookup_request_query_param( $param );
 
 		if ( '' !== $resolved ) {
+			// Log resolution event without the value — UTM/GCLID values are PII under GDPR/CCPA.
 			aqm_ghl_log(
 				'Resolved frm_get shortcode from URL for GHL payload.',
 				array(
-					'param'   => $param,
-					'preview' => is_string( $resolved ) ? substr( $resolved, 0, 120 ) : '',
+					'param'    => $param,
+					'resolved' => true,
 				)
 			);
 			return $resolved;

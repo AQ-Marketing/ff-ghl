@@ -16,6 +16,11 @@
 		return (str || '').toLowerCase().replace(/[_\-\s]+/g, '');
 	}
 
+	// Safe HTML escape — used everywhere we interpolate untrusted strings into markup.
+	function escHtml(value) {
+		return $('<div>').text(value == null ? '' : String(value)).html();
+	}
+
 	function isCoreField(name) {
 		return coreFieldNames.indexOf(normalize(name)) !== -1;
 	}
@@ -200,7 +205,7 @@
 
 		const container = $(`
 			<div class="aqm-ghl-form-block" data-form-id="${formIdInt}">
-				<h3>${formName}</h3>
+				<h3>${escHtml(formName)}</h3>
 				<div class="aqm-ghl-mapping-rows">
 					<label>Email (required)
 						<select name="${settings.optionKey || 'aqm_ghl_connector_settings'}[mapping][${formIdInt}][email]" class="regular-text aqm-ghl-field-select" data-map-key="email"></select>
@@ -385,14 +390,14 @@
 
 					let detail = '';
 					if (payload) {
-						detail += `<p><strong>Request URL:</strong> ${endpoint}</p>`;
-						detail += `<p><strong>Request Payload:</strong></p><pre>${JSON.stringify(payload, null, 2)}</pre>`;
+						detail += '<p><strong>Request URL:</strong> ' + escHtml(endpoint) + '</p>';
+						detail += '<p><strong>Request Payload:</strong></p><pre>' + escHtml(JSON.stringify(payload, null, 2)) + '</pre>';
 					}
 					if (status) {
-						detail += `<p><strong>Status:</strong> ${status}</p>`;
+						detail += '<p><strong>Status:</strong> ' + escHtml(status) + '</p>';
 					}
 					if (responseBody) {
-						detail += `<p><strong>Response Body:</strong></p><pre>${responseBody}</pre>`;
+						detail += '<p><strong>Response Body:</strong></p><pre>' + escHtml(responseBody) + '</pre>';
 					}
 
 					if (json && json.success) {
@@ -400,7 +405,7 @@
 						$testResult
 							.addClass('notice-success')
 							.removeClass('notice-error')
-							.html((json.data.message || 'Success') + detail)
+							.html(escHtml(json.data.message || 'Success') + detail)
 							.show();
 					} else {
 						const msg = (json && json.data && json.data.message) ? json.data.message : 'Test failed.';
@@ -408,7 +413,7 @@
 						$testResult
 							.addClass('notice-error')
 							.removeClass('notice-success')
-							.html(msg + detail)
+							.html(escHtml(msg) + detail)
 							.show();
 					}
 				})
@@ -550,14 +555,14 @@
 						$result
 							.addClass('notice-success')
 							.removeClass('notice-error')
-							.html(message)
+							.text(message)
 							.show();
 					} else {
 						const msg = (json && json.data && json.data.message) ? json.data.message : 'Provisioning failed.';
 						$result
 							.addClass('notice-error')
 							.removeClass('notice-success')
-							.html(msg)
+							.text(msg)
 							.show();
 					}
 				})

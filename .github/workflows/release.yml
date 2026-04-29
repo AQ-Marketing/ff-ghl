@@ -56,7 +56,7 @@ jobs:
             exit 1
           fi
 
-      - name: Create Release
+      - name: Create Release (private repo — internal record)
         uses: softprops/action-gh-release@v1
         with:
           files: aqm-ghl-connector.zip
@@ -72,3 +72,28 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror Release to public releases-only repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF#refs/tags/}"
+          PUBLIC_REPO="JustCasey76/aqm-ghl-connector-releases"
+
+          if [ -z "$GH_TOKEN" ]; then
+            echo "ERROR: RELEASES_REPO_TOKEN secret is not set."
+            echo "Create a fine-grained PAT with Contents: Read & Write on $PUBLIC_REPO and add it as the RELEASES_REPO_TOKEN repo secret."
+            exit 1
+          fi
+
+          # Delete any existing release/tag with this version on the public repo (idempotent re-runs).
+          gh release delete "$TAG" -R "$PUBLIC_REPO" --yes --cleanup-tag 2>/dev/null || true
+
+          gh release create "$TAG" \
+            -R "$PUBLIC_REPO" \
+            --title "Version ${{ steps.get_version.outputs.version }}" \
+            --notes "Plugin update for the AQM GHL Formidable Connector. Source is maintained privately; this repo holds the built ZIP only." \
+            aqm-ghl-connector.zip
+
+          echo "Mirrored release $TAG to $PUBLIC_REPO"

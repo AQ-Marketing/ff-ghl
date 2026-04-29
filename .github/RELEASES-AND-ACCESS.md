@@ -1,68 +1,38 @@
-# Releases and Who Can Push
+# Releases — How They Work
 
-## Does the AI (Cursor) have access to GitHub?
+## Two-repo split
 
-**No.** The assistant in Cursor cannot log in to GitHub, use your tokens, or push on its own. It can only:
+- **Source repo (private):** `JustCasey76/ff-ghl` — code, history, branches, issues live here.
+- **Releases repo (public):** `JustCasey76/aqm-ghl-connector-releases` — empty repo whose only purpose is hosting the built plugin ZIP as a GitHub Release. WordPress sites pull updates from here without any authentication.
 
-- Edit files in your project
-- Run commands **on your machine** (e.g. `git add`, `git commit`, or your PowerShell scripts)
+## Release flow
 
-So **you** (or your script/CI) must run `git push` and any release steps. The way to “have releases happen” is to use GitHub Actions on the repo.
+1. Bump version in `aqm-ghl-connector.php` (both the header `Version:` and `AQM_GHL_CONNECTOR_VERSION`).
+2. Commit and push to `main` on the private repo.
+3. Tag the commit: `git tag v1.8.0 && git push origin v1.8.0`.
+4. The `release.yml` GitHub Action fires on the tag push:
+   - Builds `aqm-ghl-connector.zip` (just the plugin folder, structured for WP install).
+   - Creates a release on the **private** repo (internal record, uses built-in `GITHUB_TOKEN`).
+   - Mirrors the release to the **public** repo using a PAT stored as `RELEASES_REPO_TOKEN`.
 
----
+WordPress sites with the plugin installed poll the public repo's releases API. No token, no per-site config.
 
-## How releases work (no token needed in most cases)
+## Required secret on the private repo
 
-This repo has a **GitHub Action** that creates releases:
+The private repo's Actions need permission to create releases on the public repo. This requires a fine-grained PAT:
 
-- **Workflow file:** `.github/workflows/release.yml`
-- **Triggers:** Push to `main`, or push of a tag `v*`, or **manual run** (Actions → “Create Release on Push” → “Run workflow”)
+1. Create a fine-grained token at https://github.com/settings/personal-access-tokens/new
+   - **Resource owner:** `JustCasey76`
+   - **Repository access:** Only `JustCasey76/aqm-ghl-connector-releases`
+   - **Permissions:** Contents = Read and write, Metadata = Read
+   - **Expiration:** your call (1 year is reasonable; revisit when it nears expiry)
+2. Add it as a repo secret on the **private repo** (`JustCasey76/ff-ghl`):
+   - Repo Settings → Secrets and variables → Actions → New repository secret
+   - **Name:** `RELEASES_REPO_TOKEN`
+   - **Value:** the token
 
-When it runs, GitHub provides a built-in **`GITHUB_TOKEN`** that can create releases and push tags in **this same repo**. For a **private** repo, that token still works for that repository, so you usually **do not** need to add a Personal Access Token.
+This is the only token in the system. WordPress sites no longer need any token at all.
 
-**Typical flow:**
+## Why this exists
 
-1. You (or the AI) bump the version in `aqm-ghl-connector.php`.
-2. You commit and push to `main` (or run the workflow manually).
-3. The Action builds the ZIP, creates the tag and the GitHub release, and uploads the ZIP.
-
-So: **releases are triggered by pushes (or manual run), not by the AI having “access” to the repo.**
-
----
-
-## If you need a Personal Access Token (PAT) in the Action
-
-Some organizations restrict the default `GITHUB_TOKEN`. In that case you can use a **fine-grained token** (or classic PAT) and give it to the workflow via a **secret**:
-
-1. **Create a fine-grained token (GitHub → Settings → Developer settings → Personal access tokens → Fine-grained):**
-   - Repository access: only this repo (e.g. `JustCasey76/ff-ghl`).
-   - Permissions:
-     - **Contents:** Read and write (for releases and assets).
-     - **Metadata:** Read (required).
-   - Generate and copy the token.
-
-2. **Add it as a secret in the repo:**
-   - Repo → **Settings → Secrets and variables → Actions**
-   - **New repository secret**
-   - Name: `REPO_TOKEN` (or another name you use in the workflow).
-   - Value: the token you copied.
-
-3. **Use it in the workflow**  
-   The workflow can be updated to use `secrets.REPO_TOKEN` instead of `secrets.GITHUB_TOKEN` for the steps that create the release and push the tag. If you add `REPO_TOKEN`, the workflow file can be changed to use it.
-
----
-
-## Summary
-
-| Who / What              | Can push or release? |
-|-------------------------|----------------------|
-| **Cursor (AI)**         | No. It only edits files and runs commands in your workspace. |
-| **You**                 | Yes. You push with `git push` (using your Git credentials). |
-| **GitHub Action**       | Yes. On push to `main` or manual run, it creates the release using `GITHUB_TOKEN` (or `REPO_TOKEN` if you add it). |
-
-So: **to “have access to the private repo to push changes and trigger releases,” you:**
-
-1. Push your changes to GitHub (e.g. to `main`).
-2. Rely on the existing Action to create the release when that push happens (or when you run the workflow manually).
-
-No need to “give the AI” a token; the automation runs on GitHub with the built-in token (or with a repo secret you add and use in the workflow).
+Going public-source for the *source repo* would expose commit history, branches, and unmerged work. A releases-only public repo gives WordPress's update mechanism a public, unauthenticated endpoint while keeping the dev workflow (issues, PRs, branches, history) private.
