@@ -199,28 +199,16 @@ class AQM_GHL_Admin {
 						<td>
 							<input name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[private_token]" id="aqm-ghl-private-token" type="password" value="" placeholder="••••••••" class="regular-text" autocomplete="new-password" />
 							<p class="description"><?php esc_html_e( 'Token is masked after save. Leave blank to keep the current token. If you paste a new token (e.g. with Custom Fields scope), click Save Settings so it is stored before using Refresh/Provision Custom Fields.', 'aqm-ghl' ); ?></p>
-							<details class="aqm-ghl-scopes-help" style="margin-top:8px;">
-								<summary style="cursor:pointer; font-weight:600;"><?php esc_html_e( 'Required Private Integration scopes', 'aqm-ghl' ); ?></summary>
-								<div style="margin-top:6px; padding:10px 14px; background:#f6f7f7; border-left:3px solid #2271b1;">
-									<p style="margin:0 0 6px;"><?php esc_html_e( 'When creating the Private Integration in GoHighLevel (Settings → Private Integrations → Create), enable the following scopes:', 'aqm-ghl' ); ?></p>
-									<ul style="list-style:disc; margin:0 0 6px 18px;">
-										<li><code>contacts.write</code> &mdash; <?php esc_html_e( 'create contacts on form submission', 'aqm-ghl' ); ?></li>
-										<li><code>contacts.readonly</code> &mdash; <?php esc_html_e( 'lookup before upsert (recommended)', 'aqm-ghl' ); ?></li>
-										<li><code>locations/customFields.readonly</code> &mdash; <?php esc_html_e( 'list existing custom fields for mapping', 'aqm-ghl' ); ?></li>
-										<li><code>locations/customFields.write</code> &mdash; <?php esc_html_e( 'auto-provision UTM/GCLID custom fields', 'aqm-ghl' ); ?></li>
-									</ul>
-									<p style="margin:0; font-size:12px; color:#646970;">
-										<?php
-										printf(
-											/* translators: %s: HTML link tag opening */
-											esc_html__( 'Without the customFields scopes the connection still works for basic contact creation, but UTM/GCLID fields will not be sent. %sGHL docs &rarr;%s', 'aqm-ghl' ),
-											'<a href="https://highlevel.stoplight.io/docs/integrations/6444b86544c97-scopes" target="_blank" rel="noopener">',
-											'</a>'
-										);
-										?>
-									</p>
-								</div>
-							</details>
+							<div class="aqm-ghl-scopes-help" style="margin-top:8px; padding:10px 14px; background:#f6f7f7; border-left:3px solid #2271b1;">
+								<p style="margin:0 0 6px; font-weight:600;"><?php esc_html_e( 'Required Private Integration scopes:', 'aqm-ghl' ); ?></p>
+								<ul style="list-style:disc; margin:0 0 6px 18px;">
+									<li><code>contacts.write</code> &mdash; <?php esc_html_e( 'create contacts on form submission', 'aqm-ghl' ); ?></li>
+									<li><code>contacts.readonly</code> &mdash; <?php esc_html_e( 'lookup before upsert (recommended)', 'aqm-ghl' ); ?></li>
+									<li><code>locations/customFields.readonly</code> &mdash; <?php esc_html_e( 'list existing custom fields for mapping', 'aqm-ghl' ); ?></li>
+									<li><code>locations/customFields.write</code> &mdash; <?php esc_html_e( 'auto-provision UTM/GCLID custom fields', 'aqm-ghl' ); ?></li>
+								</ul>
+								<p style="margin:0; font-size:12px; color:#646970;"><?php esc_html_e( 'Without the customFields scopes, contacts are still created but UTM/GCLID fields are not sent.', 'aqm-ghl' ); ?> <a href="https://highlevel.stoplight.io/docs/integrations/6444b86544c97-scopes" target="_blank" rel="noopener"><?php esc_html_e( 'GHL scopes documentation', 'aqm-ghl' ); ?></a></p>
+							</div>
 						</td>
 					</tr>
 					<tr>
@@ -244,7 +232,7 @@ class AQM_GHL_Admin {
 												printf(
 													/* translators: 1: form name, 2: form ID */
 													esc_html__( '%1$s (ID: %2$d)', 'aqm-ghl' ),
-													esc_html( $form->name ),
+													esc_html( (string) $form->name ),
 													(int) $form->id
 												);
 												?>
