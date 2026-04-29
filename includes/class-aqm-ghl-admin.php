@@ -138,6 +138,25 @@ class AQM_GHL_Admin {
 			return;
 		}
 
+		// Diagnostic wrapper: capture any Throwable and surface it on the page
+		// instead of letting WP show the generic critical-error screen.
+		try {
+			$this->render_settings_page_inner();
+		} catch ( \Throwable $e ) {
+			echo '<div class="wrap"><h1>AQM GHL Connector — diagnostic</h1>';
+			echo '<div class="notice notice-error"><p><strong>Caught exception while rendering settings page</strong></p>';
+			echo '<pre style="white-space:pre-wrap; background:#fff; padding:10px; border:1px solid #ccc;">';
+			echo esc_html( get_class( $e ) ) . ': ' . esc_html( $e->getMessage() ) . "\n";
+			echo 'in ' . esc_html( $e->getFile() ) . ':' . (int) $e->getLine() . "\n\n";
+			echo esc_html( $e->getTraceAsString() );
+			echo '</pre></div></div>';
+		}
+	}
+
+	/**
+	 * Original settings page render (wrapped by render_settings_page for diagnostics).
+	 */
+	private function render_settings_page_inner() {
 		$settings          = aqm_ghl_get_settings();
 		$forms             = aqm_ghl_get_formidable_forms();
 		$last_test         = aqm_ghl_get_last_test_result();
