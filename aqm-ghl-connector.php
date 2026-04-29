@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AQM GHL Formidable Connector
  * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts using a Private Integration token.
- * Version: 1.8.7
+ * Version: 1.8.8
  * Author: AQMarketing
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'AQM_GHL_CONNECTOR_VERSION', '1.8.7' );
+define( 'AQM_GHL_CONNECTOR_VERSION', '1.8.8' );
 define( 'AQM_GHL_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AQM_GHL_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 define( 'AQM_GHL_OPTION_KEY', 'aqm_ghl_connector_settings' );
@@ -45,6 +45,74 @@ if ( isset( $_GET['page'] ) && 'aqm-ghl-connector' === $_GET['page'] && defined(
 	add_action( 'admin_enqueue_scripts',    function () { aqm_ghl_diag_log( 'hook: admin_enqueue_scripts' ); }, 1 );
 	add_action( 'admin_print_scripts',      function () { aqm_ghl_diag_log( 'hook: admin_print_scripts' ); }, 999 );
 	add_action( 'admin_head',               function () { aqm_ghl_diag_log( 'hook: admin_head' ); }, 999 );
+}
+
+/**
+ * Emergency option-bloat protection.
+ *
+ * On some sites the `aqm_ghl_connector_settings` option grew to hundreds of MB
+ * (the pre-v1.8.5 sync ran on every page load and appended to `custom_fields`
+ * forever). Loading it via `get_option` would OOM before any plugin code could
+ * run. This runs before any helper file is even loaded — it queries the raw
+ * option size with $wpdb (no unserialize) and resets the bloated array fields
+ * if the option is over 1 MB. Triggered automatically on the settings page,
+ * or manually with ?aqm_ghl_emergency_reset=1.
+ */
+if ( is_admin() && function_exists( 'add_action' ) ) {
+	add_action( 'plugins_loaded', function () {
+		global $wpdb;
+		if ( ! $wpdb ) {
+			return;
+		}
+		$row = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT LENGTH(option_value) AS sz, option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
+				'aqm_ghl_connector_settings'
+			)
+		);
+		if ( ! $row ) {
+			return;
+		}
+		$size = (int) $row->sz;
+		$too_big = $size > 1048576; // 1 MB threshold
+
+		if ( ! $too_big && empty( $_GET['aqm_ghl_emergency_reset'] ) ) {
+			return;
+		}
+
+		// Try to extract the small/safe fields without unserializing the whole thing.
+		// PHP's serialize format keeps everything as a single nested s:N:"..." structure;
+		// we can regex out the simple scalar keys we care about, since they're tiny.
+		$raw = $row->option_value;
+		$kept = array(
+			'location_id'    => '',
+			'private_token'  => '',
+			'tags'           => '',
+			'enable_logging' => 0,
+			'form_ids'       => array(),
+			'mapping'        => array(),
+			'custom_fields'  => array(),
+			'locations'      => array(),
+		);
+
+		foreach ( array( 'location_id', 'private_token', 'tags' ) as $key ) {
+			if ( preg_match( '/s:\d+:"' . preg_quote( $key, '/' ) . '";s:(\d+):"((?:\\\\.|[^"\\\\]){0,2048})"/', $raw, $m ) ) {
+				$kept[ $key ] = $m[2];
+			}
+		}
+
+		$wpdb->update(
+			$wpdb->options,
+			array( 'option_value' => maybe_serialize( $kept ) ),
+			array( 'option_name'  => 'aqm_ghl_connector_settings' )
+		);
+		wp_cache_delete( 'aqm_ghl_connector_settings', 'options' );
+		wp_cache_delete( 'alloptions', 'options' );
+
+		if ( function_exists( 'aqm_ghl_diag_log' ) ) {
+			aqm_ghl_diag_log( sprintf( 'EMERGENCY RESET: option was %d bytes; preserved location_id+private_token+tags only', $size ) );
+		}
+	}, 1 );
 }
 
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/helpers.php';
