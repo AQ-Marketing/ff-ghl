@@ -100,7 +100,7 @@ class AQM_GHL_Updater {
 	 * Clear update cache (public method)
 	 */
 	public static function clear_cache() {
-		$cache_key = 'aqm_ghl_github_data_' . md5( 'JustCasey76' . 'ff-ghl' );
+		$cache_key = 'aqm_ghl_github_data_' . md5( 'AQ-Marketing' . 'ff-ghl' );
 		delete_transient( $cache_key );
 		delete_option( '_transient_' . $cache_key );
 		delete_option( '_transient_timeout_' . $cache_key );

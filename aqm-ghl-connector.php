@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AQM GHL Formidable Connector
  * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts using a Private Integration token.
- * Version: 1.9.0
+ * Version:           1.9.1
  * Author: AQMarketing
  */
 
@@ -145,7 +145,7 @@ function aqm_ghl_connector_init() {
 	// Source repo (private) publishes built ZIP releases here on each tag push.
 	new AQM_GHL_Updater(
 		__FILE__,
-		'JustCasey76',
+		'AQ-Marketing',
 		'aqm-ghl-connector-releases',
 		''
 	);
