@@ -562,33 +562,58 @@ class AQM_GHL_Admin {
 		<?php endforeach; ?>
 		<script>
 		(function(){
-			var btn = document.getElementById('aqm-ghl-fetch-workflows');
-			var out = document.getElementById('aqm-ghl-fetch-workflows-result');
-			if ( ! btn || ! out || typeof aqmGhlSettings === 'undefined' ) { return; }
-			btn.addEventListener('click', function(){
-				out.style.display = 'inline';
-				out.className = 'notice inline';
-				out.textContent = <?php echo wp_json_encode( __( 'Fetching workflows…', 'aqm-ghl' ) ); ?>;
-				var body = new FormData();
-				body.append( 'action', 'aqm_ghl_fetch_workflows' );
-				body.append( 'nonce', aqmGhlSettings.nonce );
-				fetch( aqmGhlSettings.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body } )
-					.then( function(r){ return r.json(); } )
-					.then( function(json){
-						if ( json && json.success ) {
-							out.className = 'notice notice-success inline';
-							out.textContent = ( json.data && json.data.message ) ? json.data.message : <?php echo wp_json_encode( __( 'Done. Reload the page to see the workflows.', 'aqm-ghl' ) ); ?>;
-							setTimeout(function(){ window.location.reload(); }, 600);
-						} else {
+			// The settings page renders this section mid-body, but
+			// aqmGhlSettings is injected by wp_localize_script attached to a
+			// footer-enqueued script handle — so it doesn't exist yet during
+			// the initial HTML parse. Defer to DOMContentLoaded so we run
+			// after the footer scripts execute.
+			function wire() {
+				var btn = document.getElementById('aqm-ghl-fetch-workflows');
+				var out = document.getElementById('aqm-ghl-fetch-workflows-result');
+				if ( ! btn || ! out ) {
+					console.warn('[AQM GHL] Refresh button or output element missing in DOM.');
+					return;
+				}
+				if ( typeof aqmGhlSettings === 'undefined' ) {
+					console.error('[AQM GHL] aqmGhlSettings is not defined when wiring the Refresh button. Admin script may have failed to load.');
+					out.style.display = 'inline';
+					out.className = 'notice notice-error inline';
+					out.textContent = <?php echo wp_json_encode( __( 'Plugin admin script failed to load. Check the browser console.', 'aqm-ghl' ) ); ?>;
+					return;
+				}
+				btn.addEventListener('click', function(){
+					out.style.display = 'inline';
+					out.className = 'notice inline';
+					out.textContent = <?php echo wp_json_encode( __( 'Fetching workflows…', 'aqm-ghl' ) ); ?>;
+					var body = new FormData();
+					body.append( 'action', 'aqm_ghl_fetch_workflows' );
+					body.append( 'nonce', aqmGhlSettings.nonce );
+					fetch( aqmGhlSettings.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body } )
+						.then( function(r){ return r.json(); } )
+						.then( function(json){
+							if ( json && json.success ) {
+								out.className = 'notice notice-success inline';
+								out.textContent = ( json.data && json.data.message ) ? json.data.message : <?php echo wp_json_encode( __( 'Done. Reloading…', 'aqm-ghl' ) ); ?>;
+								setTimeout(function(){ window.location.reload(); }, 600);
+							} else {
+								out.className = 'notice notice-error inline';
+								out.textContent = ( json && json.data && json.data.message ) ? json.data.message : <?php echo wp_json_encode( __( 'Failed to fetch workflows.', 'aqm-ghl' ) ); ?>;
+								console.error('[AQM GHL] fetch workflows failed:', json);
+							}
+						} )
+						.catch(function(e){
 							out.className = 'notice notice-error inline';
-							out.textContent = ( json && json.data && json.data.message ) ? json.data.message : <?php echo wp_json_encode( __( 'Failed to fetch workflows.', 'aqm-ghl' ) ); ?>;
-						}
-					} )
-					.catch(function(e){
-						out.className = 'notice notice-error inline';
-						out.textContent = String(e);
-					});
-			});
+							out.textContent = String(e);
+							console.error('[AQM GHL] fetch error:', e);
+						});
+				});
+			}
+			if ( document.readyState === 'loading' ) {
+				document.addEventListener('DOMContentLoaded', wire);
+			} else {
+				// Already loaded (rare on settings pages, but safe).
+				wire();
+			}
 		})();
 		</script>
 		<?php
