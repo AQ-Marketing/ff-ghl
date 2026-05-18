@@ -97,13 +97,34 @@ class AQM_GHL_Updater {
 
 
 	/**
-	 * Clear update cache (public method)
+	 * Clear update cache (public method).
+	 *
+	 * The fetch path stores under md5( $username . $repository ) where
+	 * $repository is the *releases* repo name (e.g. 'aqm-ghl-connector-releases'),
+	 * not the source repo. This method must use the same combination — otherwise
+	 * the admin "Clear Update Cache" button is a no-op.
+	 *
+	 * Also clears legacy keys from prior org/repo names so a one-time click after
+	 * upgrade sweeps out stale entries left over from the JustCasey76 →
+	 * AQ-Marketing migration.
 	 */
 	public static function clear_cache() {
-		$cache_key = 'aqm_ghl_github_data_' . md5( 'AQ-Marketing' . 'ff-ghl' );
-		delete_transient( $cache_key );
-		delete_option( '_transient_' . $cache_key );
-		delete_option( '_transient_timeout_' . $cache_key );
+		$keys = array(
+			// Current: AQ-Marketing/aqm-ghl-connector-releases (matches the constructor args).
+			md5( 'AQ-Marketing' . 'aqm-ghl-connector-releases' ),
+			// Legacy entries — harmless if absent, sweep them in case any are left over.
+			md5( 'JustCasey76' . 'aqm-ghl-connector-releases' ),
+			md5( 'AQ-Marketing' . 'ff-ghl' ),
+			md5( 'JustCasey76' . 'ff-ghl' ),
+		);
+
+		foreach ( $keys as $hash ) {
+			$cache_key = 'aqm_ghl_github_data_' . $hash;
+			delete_transient( $cache_key );
+			delete_option( '_transient_' . $cache_key );
+			delete_option( '_transient_timeout_' . $cache_key );
+		}
+
 		delete_site_transient( 'update_plugins' );
 	}
 
