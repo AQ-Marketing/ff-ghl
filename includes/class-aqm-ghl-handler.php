@@ -237,11 +237,28 @@ class AQM_GHL_Handler {
 			return;
 		}
 
+		$response_body = wp_remote_retrieve_body( $response );
+
+		// Extract contact ID so downstream components (AQM_GHL_Form_Submitter)
+		// can act on the newly-created/updated contact. GHL returns either
+		// { contact: { id: "..." } } or, on duplicate-email upsert, the same
+		// shape pointing at the existing contact.
+		$contact_id = '';
+		$parsed     = json_decode( $response_body, true );
+		if ( is_array( $parsed ) ) {
+			if ( ! empty( $parsed['contact']['id'] ) ) {
+				$contact_id = (string) $parsed['contact']['id'];
+			} elseif ( ! empty( $parsed['id'] ) ) {
+				$contact_id = (string) $parsed['id'];
+			}
+		}
+
 		aqm_ghl_log(
 			'Successfully sent contact to GoHighLevel.',
 			array(
-				'entry_id' => $entry_id,
-				'status'   => $code,
+				'entry_id'   => $entry_id,
+				'status'     => $code,
+				'contact_id' => $contact_id,
 			)
 		);
 		aqm_ghl_store_last_submission_result(
@@ -249,15 +266,45 @@ class AQM_GHL_Handler {
 				'success'  => true,
 				'status'   => $code,
 				'payload'  => $payload,
-				'response' => wp_remote_retrieve_body( $response ),
+				'response' => $response_body,
 				'message'  => __( 'Submission sent successfully to GoHighLevel.', 'aqm-ghl' ),
 				'context'  => array(
-					'entry_id' => (int) $entry_id,
-					'form_id'  => (int) $form_id,
+					'entry_id'   => (int) $entry_id,
+					'form_id'    => (int) $form_id,
 					'utm_params' => $utm_params,
+					'contact_id' => $contact_id,
 				),
 			)
 		);
+
+		/**
+		 * Fires after a contact has been successfully created/upserted in GHL.
+		 *
+		 * AQM_GHL_Form_Submitter listens for this to add the contact to any
+		 * GHL workflows configured for the WP form. Listening on this hook
+		 * (instead of `frm_after_create_entry` directly) guarantees the
+		 * contact exists before we try to attach a workflow to it.
+		 *
+		 * @param string $contact_id GHL contact ID.
+		 * @param int    $entry_id   Formidable entry ID.
+		 * @param int    $form_id    Formidable form ID.
+		 * @param array  $location {
+		 *     @type string $location_id   GHL location ID.
+		 *     @type string $private_token GHL Private Integration Token.
+		 * }
+		 */
+		if ( '' !== $contact_id ) {
+			do_action(
+				'aqm_ghl_contact_created',
+				$contact_id,
+				(int) $entry_id,
+				(int) $form_id,
+				array(
+					'location_id'   => $settings['location_id'],
+					'private_token' => $settings['private_token'],
+				)
+			);
+		}
 	}
 
 	/**

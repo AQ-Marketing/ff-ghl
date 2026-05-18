@@ -881,32 +881,30 @@ if ( ! function_exists( 'aqm_ghl_import_settings_data' ) ) {
 	}
 }
 
-if ( ! function_exists( 'aqm_ghl_get_webhook_binding_for_form' ) ) {
+if ( ! function_exists( 'aqm_ghl_get_workflow_binding_for_form' ) ) {
 	/**
-	 * Retrieve the GHL Inbound Webhook binding for a given WordPress form.
+	 * Retrieve the GHL Workflow binding for a given WordPress form.
 	 *
-	 * Stored at $settings['webhook_form_binding'][ $wp_form_id ] with shape:
-	 *   - enabled:     bool
-	 *   - webhook_url: string (the GHL Inbound Webhook URL from a workflow trigger)
-	 *
-	 * Returns empty array when nothing is configured.
+	 * Stored at $settings['workflow_form_binding'][ $wp_form_id ] with shape:
+	 *   - enabled:      bool
+	 *   - workflow_ids: array of GHL workflow IDs (multi-select)
 	 *
 	 * @param int $wp_form_id Formidable form ID.
 	 *
-	 * @return array
+	 * @return array Empty array when nothing is configured.
 	 */
-	function aqm_ghl_get_webhook_binding_for_form( $wp_form_id ) {
+	function aqm_ghl_get_workflow_binding_for_form( $wp_form_id ) {
 		$wp_form_id = absint( $wp_form_id );
 		if ( ! $wp_form_id ) {
 			return array();
 		}
 
 		$settings = aqm_ghl_get_settings();
-		if ( empty( $settings['webhook_form_binding'] ) || ! is_array( $settings['webhook_form_binding'] ) ) {
+		if ( empty( $settings['workflow_form_binding'] ) || ! is_array( $settings['workflow_form_binding'] ) ) {
 			return array();
 		}
 
-		$binding = isset( $settings['webhook_form_binding'][ $wp_form_id ] ) ? $settings['webhook_form_binding'][ $wp_form_id ] : null;
+		$binding = isset( $settings['workflow_form_binding'][ $wp_form_id ] ) ? $settings['workflow_form_binding'][ $wp_form_id ] : null;
 		if ( ! is_array( $binding ) ) {
 			return array();
 		}
@@ -914,37 +912,151 @@ if ( ! function_exists( 'aqm_ghl_get_webhook_binding_for_form' ) ) {
 		return wp_parse_args(
 			$binding,
 			array(
-				'enabled'     => false,
-				'webhook_url' => '',
+				'enabled'      => false,
+				'workflow_ids' => array(),
 			)
 		);
 	}
 }
 
-if ( ! function_exists( 'aqm_ghl_post_to_webhook' ) ) {
+if ( ! function_exists( 'aqm_ghl_fetch_workflows' ) ) {
 	/**
-	 * POST a JSON payload to a GHL Workflow Inbound Webhook URL.
+	 * Fetch the list of workflows for a location from the GHL v2 API.
 	 *
-	 * GHL Inbound Webhook triggers accept arbitrary JSON; the workflow editor
-	 * then maps the JSON keys to contact fields / actions. The webhook URL
-	 * itself is the auth — no Bearer token required.
+	 * Endpoint: GET https://services.leadconnectorhq.com/workflows/?locationId=...
+	 * Required PIT scope: workflows.readonly
 	 *
-	 * @param string $webhook_url Full webhook URL (validated upstream).
-	 * @param array  $payload     Payload to JSON-encode and POST.
+	 * Result is cached for 1 hour in a transient keyed by md5(location_id).
+	 * Pass $force=true to bypass cache (e.g. user-clicked "Refresh").
 	 *
-	 * @return array|\WP_Error array{status:int, body:string} on success, WP_Error on transport failure.
+	 * @param string $location_id GHL location ID.
+	 * @param string $token       Private Integration Token.
+	 * @param bool   $force       Skip cache and hit the API.
+	 *
+	 * @return array|\WP_Error Array of { id, name, status, version } objects, or WP_Error.
 	 */
-	function aqm_ghl_post_to_webhook( $webhook_url, $payload ) {
-		$response = wp_remote_post(
-			$webhook_url,
+	function aqm_ghl_fetch_workflows( $location_id, $token, $force = false ) {
+		$cache_key = 'aqm_ghl_wf_' . md5( (string) $location_id );
+
+		if ( ! $force ) {
+			$cached = get_transient( $cache_key );
+			if ( is_array( $cached ) ) {
+				return $cached;
+			}
+		}
+
+		$url = add_query_arg(
+			array( 'locationId' => $location_id ),
+			'https://services.leadconnectorhq.com/workflows/'
+		);
+
+		$response = wp_remote_get(
+			$url,
 			array(
-				'method'  => 'POST',
-				'timeout' => 15,
 				'headers' => array(
-					'Content-Type' => 'application/json',
-					'Accept'       => 'application/json',
+					'Authorization' => 'Bearer ' . $token,
+					'Version'       => '2021-07-28',
+					'Accept'        => 'application/json',
 				),
-				'body'    => wp_json_encode( $payload ),
+				'timeout' => 15,
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( $code < 200 || $code >= 300 ) {
+			$msg = is_array( $body ) && isset( $body['message'] ) ? $body['message'] : wp_remote_retrieve_body( $response );
+			// Surface scope problems with a clear pointer rather than the raw GHL error.
+			if ( 401 === (int) $code || 403 === (int) $code ) {
+				$msg = sprintf(
+					/* translators: %s: GHL error message */
+					__( 'GHL refused the request (HTTP %1$d). Your Private Integration Token may be missing the "workflows.readonly" scope. In GoHighLevel go to Settings → Private Integrations → edit the token → add "View Workflows", then paste the new token in the plugin and save. (Raw: %2$s)', 'aqm-ghl' ),
+					(int) $code,
+					$msg
+				);
+			}
+			return new \WP_Error( 'ghl_workflows_error', $msg );
+		}
+
+		if ( ! is_array( $body ) || ! isset( $body['workflows'] ) || ! is_array( $body['workflows'] ) ) {
+			return new \WP_Error( 'ghl_workflows_invalid', __( 'Unexpected response from GHL workflows endpoint.', 'aqm-ghl' ) );
+		}
+
+		$out = array();
+		foreach ( $body['workflows'] as $wf ) {
+			if ( empty( $wf['id'] ) ) {
+				continue;
+			}
+			$out[] = array(
+				'id'      => sanitize_text_field( (string) $wf['id'] ),
+				'name'    => isset( $wf['name'] ) ? sanitize_text_field( (string) $wf['name'] ) : '',
+				'status'  => isset( $wf['status'] ) ? sanitize_text_field( (string) $wf['status'] ) : '',
+				'version' => isset( $wf['version'] ) ? (int) $wf['version'] : 0,
+			);
+		}
+
+		set_transient( $cache_key, $out, HOUR_IN_SECONDS );
+
+		return $out;
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_get_cached_workflows' ) ) {
+	/**
+	 * Return cached workflows for the location without forcing an API call.
+	 * Used by admin UI rendering — if cache is cold the user can click
+	 * "Refresh Workflows" to populate it.
+	 *
+	 * @param string $location_id GHL location ID.
+	 *
+	 * @return array
+	 */
+	function aqm_ghl_get_cached_workflows( $location_id ) {
+		if ( empty( $location_id ) ) {
+			return array();
+		}
+		$cached = get_transient( 'aqm_ghl_wf_' . md5( (string) $location_id ) );
+		return is_array( $cached ) ? $cached : array();
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_add_contact_to_workflow' ) ) {
+	/**
+	 * Add a GHL contact to a workflow.
+	 *
+	 * Endpoint: POST https://services.leadconnectorhq.com/contacts/{contactId}/workflow/{workflowId}
+	 * Required PIT scope: contacts.write
+	 *
+	 * @param string $contact_id   GHL contact ID.
+	 * @param string $workflow_id  GHL workflow ID.
+	 * @param string $token        Private Integration Token.
+	 *
+	 * @return array|\WP_Error array{status:int, body:string} on transport success, WP_Error on transport failure.
+	 */
+	function aqm_ghl_add_contact_to_workflow( $contact_id, $workflow_id, $token ) {
+		$url = sprintf(
+			'https://services.leadconnectorhq.com/contacts/%s/workflow/%s',
+			rawurlencode( (string) $contact_id ),
+			rawurlencode( (string) $workflow_id )
+		);
+
+		$response = wp_remote_post(
+			$url,
+			array(
+				'headers' => array(
+					'Authorization' => 'Bearer ' . $token,
+					'Version'       => '2021-07-28',
+					'Accept'        => 'application/json',
+					'Content-Type'  => 'application/json',
+				),
+				'timeout' => 15,
+				// Endpoint accepts no body, but send an empty JSON object to be safe.
+				'body'    => '{}',
 			)
 		);
 
@@ -959,15 +1071,15 @@ if ( ! function_exists( 'aqm_ghl_post_to_webhook' ) ) {
 	}
 }
 
-if ( ! function_exists( 'aqm_ghl_sanitize_webhook_form_binding' ) ) {
+if ( ! function_exists( 'aqm_ghl_sanitize_workflow_form_binding' ) ) {
 	/**
-	 * Sanitize the per-WP-form webhook binding map for storage.
+	 * Sanitize the per-WP-form workflow binding map for storage.
 	 *
 	 * @param array $raw Raw input from the settings form.
 	 *
-	 * @return array Cleaned [ wp_form_id => { enabled, webhook_url } ] map.
+	 * @return array Cleaned [ wp_form_id => { enabled, workflow_ids } ] map.
 	 */
-	function aqm_ghl_sanitize_webhook_form_binding( $raw ) {
+	function aqm_ghl_sanitize_workflow_form_binding( $raw ) {
 		if ( empty( $raw ) || ! is_array( $raw ) ) {
 			return array();
 		}
@@ -983,12 +1095,24 @@ if ( ! function_exists( 'aqm_ghl_sanitize_webhook_form_binding' ) ) {
 				continue;
 			}
 
-			// esc_url_raw allows http(s) URLs but strips anything malicious.
-			$url = isset( $binding['webhook_url'] ) ? esc_url_raw( trim( (string) $binding['webhook_url'] ) ) : '';
+			$ids = array();
+			if ( isset( $binding['workflow_ids'] ) && is_array( $binding['workflow_ids'] ) ) {
+				$id_count = 0;
+				foreach ( $binding['workflow_ids'] as $wf_id ) {
+					if ( $id_count++ > 50 ) {
+						break;
+					}
+					$wf_id = sanitize_text_field( (string) $wf_id );
+					if ( '' !== $wf_id ) {
+						$ids[] = $wf_id;
+					}
+				}
+				$ids = array_values( array_unique( $ids ) );
+			}
 
 			$clean[ $wp_form_id ] = array(
-				'enabled'     => ! empty( $binding['enabled'] ),
-				'webhook_url' => $url,
+				'enabled'      => ! empty( $binding['enabled'] ),
+				'workflow_ids' => $ids,
 			);
 		}
 

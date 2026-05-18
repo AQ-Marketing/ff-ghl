@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: AQM GHL Formidable Connector
- * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts using a Private Integration token, and optionally forwards them per-form to GHL Workflow Inbound Webhooks.
- * Version:     1.10.1
+ * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts using a Private Integration token, and optionally adds each new contact to one or more GHL workflows you pick per WP form.
+ * Version:     1.11.0
  * Author: AQMarketing
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'AQM_GHL_CONNECTOR_VERSION', '1.10.1' );
+define( 'AQM_GHL_CONNECTOR_VERSION', '1.11.0' );
 define( 'AQM_GHL_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AQM_GHL_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 define( 'AQM_GHL_OPTION_KEY', 'aqm_ghl_connector_settings' );
