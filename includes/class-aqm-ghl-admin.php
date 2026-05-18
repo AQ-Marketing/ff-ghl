@@ -299,6 +299,8 @@ class AQM_GHL_Admin {
 					<!-- Per-form mapping containers injected by JS -->
 				</div>
 
+				<?php $this->render_webhook_section( $settings, $forms ); ?>
+
 				<h2><?php esc_html_e( 'Optional Settings', 'aqm-ghl' ); ?></h2>
 				<table class="form-table" role="presentation">
 					<tr>
@@ -441,6 +443,98 @@ class AQM_GHL_Admin {
 	}
 
 	/**
+	 * Render the "GHL Workflow Webhook" settings section.
+	 *
+	 * For each selected WP form, the user pastes a GHL Workflow Inbound
+	 * Webhook URL. When enabled, every submission to that form gets POSTed
+	 * as JSON to the URL, in addition to the existing contact-creation flow.
+	 * Field mapping happens inside the GHL workflow editor — the plugin
+	 * sends a generous JSON payload (field labels + keys, UTM, form info,
+	 * source URL) and the workflow picks what it needs.
+	 *
+	 * @param array $settings Current plugin settings.
+	 * @param array $forms    Formidable form objects.
+	 */
+	private function render_webhook_section( $settings, $forms ) {
+		$bindings   = isset( $settings['webhook_form_binding'] ) && is_array( $settings['webhook_form_binding'] ) ? $settings['webhook_form_binding'] : array();
+		$selected   = isset( $settings['form_ids'] ) && is_array( $settings['form_ids'] ) ? array_map( 'absint', $settings['form_ids'] ) : array();
+		$opt_key    = AQM_GHL_OPTION_KEY;
+		$form_index = array();
+		foreach ( $forms as $form ) {
+			$form_index[ (int) $form->id ] = $form;
+		}
+		?>
+		<h2><?php esc_html_e( 'GHL Workflow Webhook (Per-Form)', 'aqm-ghl' ); ?></h2>
+		<p class="description" style="margin-bottom: 1em;">
+			<?php esc_html_e( 'Optional. When enabled per form, the plugin will also POST each submission as JSON to a GHL Workflow Inbound Webhook URL — in addition to creating a contact. The GHL workflow handles whatever happens next (tag, pipeline, SMS, etc.). This runs server-to-server with no captcha, and every submission shows up in your workflow\'s history.', 'aqm-ghl' ); ?>
+		</p>
+		<p class="description" style="margin-bottom: 1em; padding: 8px 12px; background:#e7f5ff; border-left:3px solid #2271b1;">
+			<strong><?php esc_html_e( 'One-time GHL setup per WP form:', 'aqm-ghl' ); ?></strong><br>
+			<?php esc_html_e( '1. In GHL → Automation → Workflows, create a workflow with the trigger "Inbound Webhook".', 'aqm-ghl' ); ?><br>
+			<?php esc_html_e( '2. Copy the webhook URL it generates.', 'aqm-ghl' ); ?><br>
+			<?php esc_html_e( '3. Paste it into the matching field below and check the enable box.', 'aqm-ghl' ); ?><br>
+			<?php esc_html_e( '4. Submit one test entry, then in the GHL workflow click "Capture Sample" so it learns the JSON shape. After that, you can drag the captured fields into Create Contact / Update Contact / Tag actions.', 'aqm-ghl' ); ?>
+		</p>
+		<p class="description" style="margin-bottom: 1em;">
+			<?php esc_html_e( 'Payload sent on every submission:', 'aqm-ghl' ); ?>
+			<code>entry_id</code>, <code>form_id</code>, <code>form_name</code>, <code>submitted_at</code>, <code>source_url</code>, <code>site_url</code>, <code>ip</code>, <code>fields</code> (keyed by Formidable field label), <code>field_keys</code> (keyed by field_key), <code>utm</code> (gclid + utm_*).
+		</p>
+
+		<?php if ( empty( $selected ) ) : ?>
+			<p><em><?php esc_html_e( 'Select one or more Formidable forms above to configure their webhook destinations.', 'aqm-ghl' ); ?></em></p>
+			<?php return; ?>
+		<?php endif; ?>
+
+		<?php foreach ( $selected as $wp_form_id ) :
+			if ( ! isset( $form_index[ $wp_form_id ] ) ) { continue; }
+			$wp_form     = $form_index[ $wp_form_id ];
+			$binding     = isset( $bindings[ $wp_form_id ] ) ? $bindings[ $wp_form_id ] : array();
+			$enabled     = ! empty( $binding['enabled'] );
+			$webhook_url = isset( $binding['webhook_url'] ) ? (string) $binding['webhook_url'] : '';
+			$base_name   = $opt_key . '[webhook_form_binding][' . (int) $wp_form_id . ']';
+		?>
+			<div class="aqm-ghl-webhook-binding" style="margin: 12px 0; border: 1px solid #c3c4c7; background:#fff; padding: 12px 16px;">
+				<h3 style="margin-top:0;">
+					<?php
+					printf(
+						/* translators: 1: form name, 2: form ID */
+						esc_html__( '%1$s (WP form ID: %2$d)', 'aqm-ghl' ),
+						esc_html( (string) $wp_form->name ),
+						(int) $wp_form_id
+					);
+					?>
+				</h3>
+				<table class="form-table" role="presentation">
+					<tr>
+						<th scope="row"><?php esc_html_e( 'Forward to GHL Workflow', 'aqm-ghl' ); ?></th>
+						<td>
+							<label>
+								<input type="checkbox" name="<?php echo esc_attr( $base_name ); ?>[enabled]" value="1" <?php checked( $enabled ); ?> />
+								<?php esc_html_e( 'POST each submission as JSON to the webhook URL below.', 'aqm-ghl' ); ?>
+							</label>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="aqm-ghl-webhook-url-<?php echo (int) $wp_form_id; ?>"><?php esc_html_e( 'Webhook URL', 'aqm-ghl' ); ?></label></th>
+						<td>
+							<input
+								type="url"
+								id="aqm-ghl-webhook-url-<?php echo (int) $wp_form_id; ?>"
+								name="<?php echo esc_attr( $base_name ); ?>[webhook_url]"
+								value="<?php echo esc_attr( $webhook_url ); ?>"
+								class="large-text code"
+								placeholder="https://services.leadconnectorhq.com/hooks/..."
+							/>
+							<p class="description"><?php esc_html_e( 'Paste the Inbound Webhook URL from your GHL workflow trigger. The URL itself is the secret — keep it private.', 'aqm-ghl' ); ?></p>
+						</td>
+					</tr>
+				</table>
+			</div>
+		<?php endforeach; ?>
+		<?php
+	}
+
+	/**
 	 * Sanitize settings before save.
 	 *
 	 * @param array $input Raw input.
@@ -571,6 +665,14 @@ class AQM_GHL_Admin {
 		$sanitized['custom_fields'] = $sanitized_custom_fields;
 
 		$sanitized['tags'] = isset( $input['tags'] ) ? sanitize_text_field( $input['tags'] ) : '';
+
+		// Per-WP-form binding to a GHL Workflow Inbound Webhook URL, used by
+		// AQM_GHL_Form_Submitter. Preserved across saves for forms not currently
+		// selected (so removing a form from `form_ids` and re-adding it later
+		// doesn't lose the binding).
+		$existing_bindings = isset( $existing['webhook_form_binding'] ) && is_array( $existing['webhook_form_binding'] ) ? $existing['webhook_form_binding'] : array();
+		$new_bindings      = isset( $input['webhook_form_binding'] ) ? aqm_ghl_sanitize_webhook_form_binding( $input['webhook_form_binding'] ) : array();
+		$sanitized['webhook_form_binding'] = array_replace( $existing_bindings, $new_bindings );
 
 		$sanitized['enable_logging'] = ! empty( $input['enable_logging'] ) ? 1 : 0;
 

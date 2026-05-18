@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: AQM GHL Formidable Connector
- * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts using a Private Integration token.
- * Version:           1.9.1
+ * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts using a Private Integration token, and optionally forwards them per-form to GHL Workflow Inbound Webhooks.
+ * Version:     1.10.0
  * Author: AQMarketing
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'AQM_GHL_CONNECTOR_VERSION', '1.9.0' );
+define( 'AQM_GHL_CONNECTOR_VERSION', '1.10.0' );
 define( 'AQM_GHL_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AQM_GHL_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 define( 'AQM_GHL_OPTION_KEY', 'aqm_ghl_connector_settings' );
@@ -124,6 +124,7 @@ require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-utm-tracker.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-custom-field-provisioner.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-admin.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-handler.php';
+require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-form-submitter.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-updater.php';
 
 /**
@@ -140,6 +141,7 @@ add_action( 'plugins_loaded', 'aqm_ghl_connector_init_utm_tracker', 5 );
 function aqm_ghl_connector_init() {
 	new AQM_GHL_Admin();
 	new AQM_GHL_Handler();
+	new AQM_GHL_Form_Submitter();
 
 	// Updates pull from a public release-mirror repo — no token required.
 	// Source repo (private) publishes built ZIP releases here on each tag push.

@@ -881,3 +881,118 @@ if ( ! function_exists( 'aqm_ghl_import_settings_data' ) ) {
 	}
 }
 
+if ( ! function_exists( 'aqm_ghl_get_webhook_binding_for_form' ) ) {
+	/**
+	 * Retrieve the GHL Inbound Webhook binding for a given WordPress form.
+	 *
+	 * Stored at $settings['webhook_form_binding'][ $wp_form_id ] with shape:
+	 *   - enabled:     bool
+	 *   - webhook_url: string (the GHL Inbound Webhook URL from a workflow trigger)
+	 *
+	 * Returns empty array when nothing is configured.
+	 *
+	 * @param int $wp_form_id Formidable form ID.
+	 *
+	 * @return array
+	 */
+	function aqm_ghl_get_webhook_binding_for_form( $wp_form_id ) {
+		$wp_form_id = absint( $wp_form_id );
+		if ( ! $wp_form_id ) {
+			return array();
+		}
+
+		$settings = aqm_ghl_get_settings();
+		if ( empty( $settings['webhook_form_binding'] ) || ! is_array( $settings['webhook_form_binding'] ) ) {
+			return array();
+		}
+
+		$binding = isset( $settings['webhook_form_binding'][ $wp_form_id ] ) ? $settings['webhook_form_binding'][ $wp_form_id ] : null;
+		if ( ! is_array( $binding ) ) {
+			return array();
+		}
+
+		return wp_parse_args(
+			$binding,
+			array(
+				'enabled'     => false,
+				'webhook_url' => '',
+			)
+		);
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_post_to_webhook' ) ) {
+	/**
+	 * POST a JSON payload to a GHL Workflow Inbound Webhook URL.
+	 *
+	 * GHL Inbound Webhook triggers accept arbitrary JSON; the workflow editor
+	 * then maps the JSON keys to contact fields / actions. The webhook URL
+	 * itself is the auth — no Bearer token required.
+	 *
+	 * @param string $webhook_url Full webhook URL (validated upstream).
+	 * @param array  $payload     Payload to JSON-encode and POST.
+	 *
+	 * @return array|\WP_Error array{status:int, body:string} on success, WP_Error on transport failure.
+	 */
+	function aqm_ghl_post_to_webhook( $webhook_url, $payload ) {
+		$response = wp_remote_post(
+			$webhook_url,
+			array(
+				'method'  => 'POST',
+				'timeout' => 15,
+				'headers' => array(
+					'Content-Type' => 'application/json',
+					'Accept'       => 'application/json',
+				),
+				'body'    => wp_json_encode( $payload ),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		return array(
+			'status' => (int) wp_remote_retrieve_response_code( $response ),
+			'body'   => (string) wp_remote_retrieve_body( $response ),
+		);
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_sanitize_webhook_form_binding' ) ) {
+	/**
+	 * Sanitize the per-WP-form webhook binding map for storage.
+	 *
+	 * @param array $raw Raw input from the settings form.
+	 *
+	 * @return array Cleaned [ wp_form_id => { enabled, webhook_url } ] map.
+	 */
+	function aqm_ghl_sanitize_webhook_form_binding( $raw ) {
+		if ( empty( $raw ) || ! is_array( $raw ) ) {
+			return array();
+		}
+
+		$clean = array();
+		$count = 0;
+		foreach ( $raw as $wp_form_id => $binding ) {
+			if ( $count++ > 200 || ! is_array( $binding ) ) {
+				continue;
+			}
+			$wp_form_id = absint( $wp_form_id );
+			if ( ! $wp_form_id ) {
+				continue;
+			}
+
+			// esc_url_raw allows http(s) URLs but strips anything malicious.
+			$url = isset( $binding['webhook_url'] ) ? esc_url_raw( trim( (string) $binding['webhook_url'] ) ) : '';
+
+			$clean[ $wp_form_id ] = array(
+				'enabled'     => ! empty( $binding['enabled'] ),
+				'webhook_url' => $url,
+			);
+		}
+
+		return $clean;
+	}
+}
+
