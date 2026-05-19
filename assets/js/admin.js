@@ -71,6 +71,41 @@
 		});
 	}
 
+	// Heuristic mapping: given the canonical mapping key (email / phone / first_name / last_name)
+	// and the list of Formidable fields for the form, return the best-guess field id to
+	// pre-select when no explicit mapping has been saved yet. Returns '' if no good guess.
+	function guessFieldIdForKey(mapKey, fields) {
+		if (!Array.isArray(fields) || !fields.length) {
+			return '';
+		}
+		const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+		// Patterns are tried in order; first match wins. Each entry: [regex, optionalTypeCheck]
+		const rules = {
+			email:      [/\bemail\b/, /\be\s*mail\b/],
+			phone:      [/\bphone\b/, /\bmobile\b/, /\btel\b/, /\bcell\b/],
+			first_name: [/\bfirst\s*name\b/, /\bfirst\b/, /\bgiven\s*name\b/, /\bfname\b/],
+			last_name:  [/\blast\s*name\b/, /\blast\b/, /\bsurname\b/, /\bfamily\s*name\b/, /\blname\b/],
+		};
+
+		const patterns = rules[mapKey];
+		if (!patterns) {
+			return '';
+		}
+
+		// Try each pattern in priority order.
+		for (let i = 0; i < patterns.length; i++) {
+			const pat = patterns[i];
+			for (let j = 0; j < fields.length; j++) {
+				const label = norm(fields[j].label);
+				if (pat.test(label)) {
+					return String(fields[j].id);
+				}
+			}
+		}
+		return '';
+	}
+
 	function renderMapping(fields) {
 		mappingFields.forEach((key) => {
 			const selected = settings.mapping && settings.mapping[key] ? settings.mapping[key] : '';
@@ -247,12 +282,36 @@
 		loadFields(formIdInt)
 			.then((fields) => {
 				console.log(`[AQM GHL] Loading fields for form ${formIdInt}, existing map:`, existingMap);
+				let anyAutoGuessed = false;
 				container.find('select.aqm-ghl-field-select').each(function () {
-					const key = $(this).data('map-key');
-					const selected = existingMap && existingMap[key] ? existingMap[key] : '';
-					console.log(`[AQM GHL] Setting ${key} to ${selected} for form ${formIdInt}`);
-					setSelectOptions($(this), fields, selected);
+					const $sel = $(this);
+					const key = $sel.data('map-key');
+					// Prefer the saved mapping if present; otherwise auto-guess
+					// from the Formidable field labels (e.g. "Email" → email field).
+					let selected = existingMap && existingMap[key] ? existingMap[key] : '';
+					let autoGuessed = false;
+					if (!selected) {
+						const guessed = guessFieldIdForKey(key, fields);
+						if (guessed) {
+							selected = guessed;
+							autoGuessed = true;
+							anyAutoGuessed = true;
+						}
+					}
+					console.log(`[AQM GHL] Setting ${key} to ${selected} for form ${formIdInt}${autoGuessed ? ' (auto-guessed)' : ''}`);
+					setSelectOptions($sel, fields, selected);
+					if (autoGuessed) {
+						// Mark the surrounding label so we can style/badge it.
+						$sel.closest('label').addClass('aqm-ghl-auto-mapped');
+					}
 				});
+				if (anyAutoGuessed) {
+					// Insert a tiny "auto-matched fields" hint at the top of the mapping rows.
+					const $rows = container.find('.aqm-ghl-mapping-rows');
+					if ($rows.length && !$rows.find('.aqm-ghl-auto-notice').length) {
+						$rows.prepend('<p class="aqm-ghl-auto-notice" style="margin:0 0 8px;font-size:12px;color:#0a4a91;background:#e7f5ff;padding:6px 10px;border-left:3px solid #2271b1;">Auto-matched fields based on Formidable labels. Adjust if needed, then Save Changes.</p>');
+					}
+				}
 				renderCustomFields(formIdInt, container, fields);
 			})
 			.catch(() => {

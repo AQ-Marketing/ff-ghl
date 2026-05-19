@@ -214,9 +214,25 @@ class AQM_GHL_Admin {
 					<p><?php esc_html_e( 'Formidable Forms is not active. Install and activate it to configure this integration.', 'aqm-ghl' ); ?></p>
 				</div>
 			<?php endif; ?>
-			<?php if ( empty( $settings['location_id'] ) || empty( $settings['private_token'] ) || empty( $settings['form_ids'] ) ) : ?>
+			<?php
+			// Configuration completeness check: have an auth method (OAuth OR legacy PIT) AND at least one form picked.
+			$oauth_connected = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
+			$pit_configured  = ! empty( $settings['location_id'] ) && ! empty( $settings['private_token'] );
+			$has_auth        = $oauth_connected || $pit_configured;
+			$has_forms       = ! empty( $settings['form_ids'] );
+			?>
+			<?php if ( ! $has_auth || ! $has_forms ) : ?>
 				<div class="notice notice-warning">
-					<p><?php esc_html_e( 'Configuration incomplete. Add your GoHighLevel credentials and select at least one Formidable form.', 'aqm-ghl' ); ?></p>
+					<p>
+						<strong><?php esc_html_e( 'Setup needed:', 'aqm-ghl' ); ?></strong>
+						<?php if ( ! $has_auth && ! $has_forms ) : ?>
+							<?php esc_html_e( 'Connect to GoHighLevel below and select at least one Formidable form to start sending submissions.', 'aqm-ghl' ); ?>
+						<?php elseif ( ! $has_auth ) : ?>
+							<?php esc_html_e( 'Connect to GoHighLevel below to enable form submissions.', 'aqm-ghl' ); ?>
+						<?php else : ?>
+							<?php esc_html_e( 'Select at least one Formidable form below to send submissions to GoHighLevel.', 'aqm-ghl' ); ?>
+						<?php endif; ?>
+					</p>
 				</div>
 			<?php endif; ?>
 
@@ -226,221 +242,225 @@ class AQM_GHL_Admin {
 				<?php
 				settings_fields( 'aqm_ghl_connector' );
 				?>
+
+				<?php // Legacy Private Integration Token fields are no longer surfaced in the UI
+				// since AQM has fully migrated to the OAuth Marketplace App flow. The underlying
+				// values still persist in settings (so v1.x sites that haven't migrated yet keep
+				// working), and the auth router auto-detects which mode to use. Should we ever
+				// need to expose PIT fields again for debugging, restore the previous <details>
+				// block from git history. ?>
+
 				<table class="form-table" role="presentation">
 					<tr>
-						<th scope="row"><label for="aqm-ghl-location-id"><?php esc_html_e( 'GHL Location ID', 'aqm-ghl' ); ?></label></th>
-						<td>
-							<input name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[location_id]" id="aqm-ghl-location-id" type="text" value="<?php echo esc_attr( $settings['location_id'] ); ?>" class="regular-text" />
-							<p class="description"><?php esc_html_e( 'Legacy PIT mode only — leave empty if using OAuth (above).', 'aqm-ghl' ); ?></p>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><label for="aqm-ghl-private-token"><?php esc_html_e( 'GHL Private Integration Token', 'aqm-ghl' ); ?></label></th>
-						<td>
-							<input name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[private_token]" id="aqm-ghl-private-token" type="password" value="" placeholder="••••••••" class="regular-text" autocomplete="new-password" />
-							<p class="description"><?php esc_html_e( 'Token is masked after save. Leave blank to keep the current token. If you paste a new token (e.g. with Custom Fields scope), click Save Settings so it is stored before using Refresh/Provision Custom Fields.', 'aqm-ghl' ); ?></p>
-							<div class="aqm-ghl-scopes-help" style="margin-top:8px; padding:10px 14px; background:#f6f7f7; border-left:3px solid #2271b1;">
-								<p style="margin:0 0 6px; font-weight:600;"><?php esc_html_e( 'Required Private Integration scopes:', 'aqm-ghl' ); ?></p>
-								<ul style="list-style:disc; margin:0 0 6px 18px;">
-									<li><code>contacts.write</code> &mdash; <?php esc_html_e( 'create contacts on form submission', 'aqm-ghl' ); ?></li>
-									<li><code>contacts.readonly</code> &mdash; <?php esc_html_e( 'lookup before upsert (recommended)', 'aqm-ghl' ); ?></li>
-									<li><code>locations/customFields.readonly</code> &mdash; <?php esc_html_e( 'list existing custom fields for mapping', 'aqm-ghl' ); ?></li>
-									<li><code>locations/customFields.write</code> &mdash; <?php esc_html_e( 'auto-provision UTM/GCLID custom fields', 'aqm-ghl' ); ?></li>
-								</ul>
-								<p style="margin:0; font-size:12px; color:#646970;"><?php esc_html_e( 'Without the customFields scopes, contacts are still created but UTM/GCLID fields are not sent.', 'aqm-ghl' ); ?> <a href="https://highlevel.stoplight.io/docs/integrations/6444b86544c97-scopes" target="_blank" rel="noopener"><?php esc_html_e( 'GHL scopes documentation', 'aqm-ghl' ); ?></a></p>
-							</div>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><label><?php esc_html_e( 'Formidable Forms', 'aqm-ghl' ); ?></label></th>
+						<th scope="row"><label><?php esc_html_e( 'Which forms to send', 'aqm-ghl' ); ?></label></th>
 						<td>
 							<div class="aqm-ghl-form-checkboxes">
 								<?php if ( ! empty( $forms ) ) : ?>
 									<?php foreach ( $forms as $form ) : ?>
 										<?php $is_checked = in_array( (int) $form->id, isset( $settings['form_ids'] ) ? (array) $settings['form_ids'] : array(), true ); ?>
 										<label class="aqm-ghl-form-checkbox-item">
-											<input 
-												type="checkbox" 
-												name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[form_ids][]" 
-												value="<?php echo esc_attr( $form->id ); ?>" 
+											<input
+												type="checkbox"
+												name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[form_ids][]"
+												value="<?php echo esc_attr( $form->id ); ?>"
 												class="aqm-ghl-form-checkbox"
 												data-form-id="<?php echo esc_attr( $form->id ); ?>"
 												<?php checked( $is_checked ); ?>
 											/>
 											<span class="aqm-ghl-form-checkbox-label">
-												<?php
-												printf(
-													/* translators: 1: form name, 2: form ID */
-													esc_html__( '%1$s (ID: %2$d)', 'aqm-ghl' ),
-													esc_html( (string) $form->name ),
-													(int) $form->id
-												);
-												?>
+												<?php echo esc_html( (string) $form->name ); ?>
+												<span class="description" style="font-size: 11px; color: #646970;">(ID: <?php echo (int) $form->id; ?>)</span>
 											</span>
 										</label>
 									<?php endforeach; ?>
 								<?php else : ?>
-									<p class="description"><?php esc_html_e( 'No forms found. Please create a form in Formidable Forms first.', 'aqm-ghl' ); ?></p>
+									<p class="description"><?php esc_html_e( 'No Formidable Forms found yet. Create a form in Formidable, then come back here.', 'aqm-ghl' ); ?></p>
 								<?php endif; ?>
 							</div>
-							<p class="description"><?php esc_html_e( 'Select one or more forms to send to GoHighLevel.', 'aqm-ghl' ); ?></p>
+							<p class="description"><?php esc_html_e( 'Tick each form whose submissions you want sent to GoHighLevel. Forms you don\'t tick are ignored.', 'aqm-ghl' ); ?></p>
 						</td>
 					</tr>
 				</table>
 
-				<h2><?php esc_html_e( 'Field Mapping', 'aqm-ghl' ); ?></h2>
+				<h2 style="margin-top: 2em;"><?php esc_html_e( 'Field mapping', 'aqm-ghl' ); ?></h2>
 				<p class="description" style="margin-bottom: 1em;">
-					<?php esc_html_e( 'GHL custom fields are auto-detected and mapped to matching Formidable fields. Use "Refresh GHL Fields" if you have added or changed fields in GHL.', 'aqm-ghl' ); ?>
+					<?php esc_html_e( 'Tell the plugin which Formidable field goes into which GoHighLevel contact field. Custom fields are auto-detected.', 'aqm-ghl' ); ?>
 				</p>
-				<p>
-					<button type="button" class="button button-secondary" id="aqm-ghl-fetch-ghl-fields"><?php esc_html_e( 'Refresh GHL Fields', 'aqm-ghl' ); ?></button>
-					<button type="button" class="button button-secondary" id="aqm-ghl-provision-fields"><?php esc_html_e( 'Provision UTM/GCLID Fields', 'aqm-ghl' ); ?></button>
-					<span id="aqm-ghl-fetch-result" class="aqm-ghl-fetch-result" style="display:none;"></span>
-					<span id="aqm-ghl-provision-result" class="notice inline" style="display:none; margin-left: 10px;"></span>
-				</p>
+				<?php if ( empty( $settings['form_ids'] ) ) : ?>
+					<p style="padding: 14px; background: #f6f7f7; border-left: 3px solid #c3c4c7; color: #50575e;">
+						<em><?php esc_html_e( 'Pick at least one form above to start mapping fields.', 'aqm-ghl' ); ?></em>
+					</p>
+				<?php else : ?>
+					<p>
+						<button type="button" class="button button-secondary" id="aqm-ghl-fetch-ghl-fields"><?php esc_html_e( 'Refresh GHL custom fields', 'aqm-ghl' ); ?></button>
+						<button type="button" class="button button-secondary" id="aqm-ghl-provision-fields"><?php esc_html_e( 'Create UTM / GCLID fields in GHL', 'aqm-ghl' ); ?></button>
+						<span id="aqm-ghl-fetch-result" class="aqm-ghl-fetch-result" style="display:none;"></span>
+						<span id="aqm-ghl-provision-result" class="notice inline" style="display:none; margin-left: 10px;"></span>
+					</p>
+					<p class="description" style="margin-top: 0.25em;">
+						<?php esc_html_e( 'Click "Refresh" if you added or renamed fields in GHL. "Create UTM / GCLID fields" makes new GHL custom fields for tracking attribution.', 'aqm-ghl' ); ?>
+					</p>
+				<?php endif; ?>
 				<div id="aqm-ghl-form-mapping-containers">
 					<!-- Per-form mapping containers injected by JS -->
 				</div>
 
 				<?php $this->render_workflows_section( $settings, $forms ); ?>
 
-				<h2><?php esc_html_e( 'Optional Settings', 'aqm-ghl' ); ?></h2>
+				<h2 style="margin-top: 2em;"><?php esc_html_e( 'Optional settings', 'aqm-ghl' ); ?></h2>
 				<table class="form-table" role="presentation">
 					<tr>
-						<th scope="row"><label for="aqm-ghl-tags"><?php esc_html_e( 'Tags', 'aqm-ghl' ); ?></label></th>
+						<th scope="row"><label for="aqm-ghl-tags"><?php esc_html_e( 'Contact tags', 'aqm-ghl' ); ?></label></th>
 						<td>
-							<input name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[tags]" id="aqm-ghl-tags" type="text" value="<?php echo esc_attr( $settings['tags'] ); ?>" class="regular-text" />
-							<p class="description"><?php esc_html_e( 'Comma-separated tags to apply to the contact.', 'aqm-ghl' ); ?></p>
+							<input name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[tags]" id="aqm-ghl-tags" type="text" value="<?php echo esc_attr( $settings['tags'] ); ?>" class="regular-text" placeholder="<?php esc_attr_e( 'e.g. website-lead, contact-form', 'aqm-ghl' ); ?>" />
+							<p class="description"><?php esc_html_e( 'Tags to apply to every contact created from this site. Separate multiple tags with commas.', 'aqm-ghl' ); ?></p>
 						</td>
 					</tr>
 					<tr>
-						<th scope="row"><label for="aqm-ghl-logging"><?php esc_html_e( 'Enable logging', 'aqm-ghl' ); ?></label></th>
+						<th scope="row"><label for="aqm-ghl-logging"><?php esc_html_e( 'Debug logging', 'aqm-ghl' ); ?></label></th>
 						<td>
 							<label>
 								<input name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[enable_logging]" id="aqm-ghl-logging" type="checkbox" value="1" <?php checked( ! empty( $settings['enable_logging'] ) ); ?> />
-								<?php esc_html_e( 'Log requests and errors to the PHP error log.', 'aqm-ghl' ); ?>
+								<?php esc_html_e( 'Write detailed activity to the WordPress error log for troubleshooting.', 'aqm-ghl' ); ?>
 							</label>
+							<p class="description"><?php esc_html_e( 'Leave off unless you\'re debugging something — the log gets noisy.', 'aqm-ghl' ); ?></p>
 						</td>
 					</tr>
 				</table>
 
-				<h2><?php esc_html_e( 'Connection Test', 'aqm-ghl' ); ?></h2>
-				<p><?php esc_html_e( 'Send a mock "John Doe" contact to your GoHighLevel location to verify credentials.', 'aqm-ghl' ); ?></p>
-				<p>
-					<button type="button" class="button button-secondary" id="aqm-ghl-test-connection"><?php esc_html_e( 'Send Test Contact', 'aqm-ghl' ); ?></button>
-				</p>
-				<div id="aqm-ghl-test-result" class="notice inline" style="display:none;"></div>
+				<?php submit_button( __( 'Save Changes', 'aqm-ghl' ) ); ?>
 
-				<h2><?php esc_html_e( 'Update Management', 'aqm-ghl' ); ?></h2>
-				<p><?php esc_html_e( 'Updates are pulled from a public release feed. If a new version is not appearing, clear the update cache.', 'aqm-ghl' ); ?></p>
-				<p>
-					<button type="button" class="button button-secondary" id="aqm-ghl-clear-cache"><?php esc_html_e( 'Clear Update Cache', 'aqm-ghl' ); ?></button>
-					<span id="aqm-ghl-cache-result" class="notice inline" style="display:none; margin-left: 10px;"></span>
-				</p>
-				<p class="description">
-					<?php
-					printf(
+				<!-- ── Diagnostics & Admin Tools ── -->
+				<!-- Wrapped in collapsed disclosures so non-tech users aren't overwhelmed by debug output by default. -->
+
+				<h2 style="margin-top: 2.5em; border-top: 1px solid #dcdcde; padding-top: 1.5em;"><?php esc_html_e( 'Diagnostics & admin tools', 'aqm-ghl' ); ?></h2>
+				<p class="description"><?php esc_html_e( 'These tools are for troubleshooting and don\'t need to be touched in normal use.', 'aqm-ghl' ); ?></p>
+
+				<details style="margin: 1em 0; border: 1px solid #dcdcde; background: #fff;">
+					<summary style="cursor: pointer; padding: 10px 14px; background: #f6f7f7; font-weight: 600;">
+						<?php esc_html_e( 'Test connection', 'aqm-ghl' ); ?>
+					</summary>
+					<div style="padding: 12px 18px;">
+						<p><?php esc_html_e( 'Send a mock "John Doe" contact to your GoHighLevel sub-account to verify the connection works.', 'aqm-ghl' ); ?></p>
+						<p>
+							<button type="button" class="button button-secondary" id="aqm-ghl-test-connection"><?php esc_html_e( 'Send Test Contact', 'aqm-ghl' ); ?></button>
+						</p>
+						<div id="aqm-ghl-test-result" class="notice inline" style="display:none;"></div>
+					</div>
+				</details>
+
+				<details style="margin: 1em 0; border: 1px solid #dcdcde; background: #fff;">
+					<summary style="cursor: pointer; padding: 10px 14px; background: #f6f7f7; font-weight: 600;">
+						<?php
 						/* translators: %s: current version */
-						esc_html__( 'Current version: %s', 'aqm-ghl' ),
-						esc_html( AQM_GHL_CONNECTOR_VERSION )
-					);
-					?>
-				</p>
+						printf( esc_html__( 'Plugin updates (current version: %s)', 'aqm-ghl' ), esc_html( AQM_GHL_CONNECTOR_VERSION ) );
+						?>
+					</summary>
+					<div style="padding: 12px 18px;">
+						<p><?php esc_html_e( 'Plugin auto-updates from a release feed. If a new version isn\'t appearing in the WordPress updates page, clear the update cache.', 'aqm-ghl' ); ?></p>
+						<p>
+							<button type="button" class="button button-secondary" id="aqm-ghl-clear-cache"><?php esc_html_e( 'Clear Update Cache', 'aqm-ghl' ); ?></button>
+							<span id="aqm-ghl-cache-result" class="notice inline" style="display:none; margin-left: 10px;"></span>
+						</p>
+					</div>
+				</details>
 
-				<h2><?php esc_html_e( 'Last Test Result', 'aqm-ghl' ); ?></h2>
-				<?php if ( ! empty( $last_test['timestamp'] ) ) : ?>
-					<p>
-						<strong><?php esc_html_e( 'Timestamp:', 'aqm-ghl' ); ?></strong>
-						<?php echo esc_html( $last_test['timestamp'] ); ?>
-					</p>
-					<p>
-						<strong><?php esc_html_e( 'Status:', 'aqm-ghl' ); ?></strong>
-						<?php echo esc_html( $last_test['status'] ); ?>
-					</p>
-					<p>
-						<strong><?php esc_html_e( 'Message:', 'aqm-ghl' ); ?></strong>
-						<?php echo esc_html( $last_test['message'] ); ?>
-					</p>
-					<?php if ( $last_payload ) : ?>
-						<p><strong><?php esc_html_e( 'Request Payload:', 'aqm-ghl' ); ?></strong></p>
-						<pre><?php echo esc_html( $last_payload ); ?></pre>
-					<?php endif; ?>
-					<?php if ( ! empty( $last_test['response'] ) ) : ?>
-						<p><strong><?php esc_html_e( 'Response Body:', 'aqm-ghl' ); ?></strong></p>
-						<pre><?php echo esc_html( $last_test['response'] ); ?></pre>
-					<?php endif; ?>
-				<?php else : ?>
-					<p><?php esc_html_e( 'No test run yet.', 'aqm-ghl' ); ?></p>
-				<?php endif; ?>
+				<details style="margin: 1em 0; border: 1px solid #dcdcde; background: #fff;">
+					<summary style="cursor: pointer; padding: 10px 14px; background: #f6f7f7; font-weight: 600;">
+						<?php esc_html_e( 'Last test result', 'aqm-ghl' ); ?>
+						<?php if ( ! empty( $last_test['timestamp'] ) ) : ?>
+							<span style="font-weight: normal; color: #646970; font-size: 12px;">— <?php echo esc_html( $last_test['timestamp'] ); ?></span>
+						<?php endif; ?>
+					</summary>
+					<div style="padding: 12px 18px;">
+						<?php if ( ! empty( $last_test['timestamp'] ) ) : ?>
+							<p><strong><?php esc_html_e( 'Status:', 'aqm-ghl' ); ?></strong> <?php echo esc_html( $last_test['status'] ); ?></p>
+							<p><strong><?php esc_html_e( 'Message:', 'aqm-ghl' ); ?></strong> <?php echo esc_html( $last_test['message'] ); ?></p>
+							<?php if ( $last_payload ) : ?>
+								<p><strong><?php esc_html_e( 'Request payload:', 'aqm-ghl' ); ?></strong></p>
+								<pre style="max-height: 240px; overflow: auto;"><?php echo esc_html( $last_payload ); ?></pre>
+							<?php endif; ?>
+							<?php if ( ! empty( $last_test['response'] ) ) : ?>
+								<p><strong><?php esc_html_e( 'Response body:', 'aqm-ghl' ); ?></strong></p>
+								<pre style="max-height: 240px; overflow: auto;"><?php echo esc_html( $last_test['response'] ); ?></pre>
+							<?php endif; ?>
+						<?php else : ?>
+							<p><em><?php esc_html_e( 'No test run yet. Use "Test connection" above.', 'aqm-ghl' ); ?></em></p>
+						<?php endif; ?>
+					</div>
+				</details>
 
-				<h2><?php esc_html_e( 'Last Live Submission', 'aqm-ghl' ); ?></h2>
-				<?php if ( ! empty( $last_submission['timestamp'] ) ) : ?>
-					<p>
-						<strong><?php esc_html_e( 'Timestamp:', 'aqm-ghl' ); ?></strong>
-						<?php echo esc_html( $last_submission['timestamp'] ); ?>
-					</p>
-					<p>
-						<strong><?php esc_html_e( 'Status:', 'aqm-ghl' ); ?></strong>
-						<?php echo esc_html( $last_submission['status'] ); ?>
-					</p>
-					<p>
-						<strong><?php esc_html_e( 'Message:', 'aqm-ghl' ); ?></strong>
-						<?php echo esc_html( $last_submission['message'] ); ?>
-					</p>
-					<?php if ( $last_submission_context ) : ?>
-						<p><strong><?php esc_html_e( 'Context:', 'aqm-ghl' ); ?></strong></p>
-						<pre><?php echo esc_html( $last_submission_context ); ?></pre>
-					<?php endif; ?>
-					<?php if ( $last_submission_payload ) : ?>
-						<p><strong><?php esc_html_e( 'Request Payload:', 'aqm-ghl' ); ?></strong></p>
-						<pre><?php echo esc_html( $last_submission_payload ); ?></pre>
-					<?php endif; ?>
-					<?php if ( ! empty( $last_submission['response'] ) ) : ?>
-						<p><strong><?php esc_html_e( 'Response Body:', 'aqm-ghl' ); ?></strong></p>
-						<pre><?php echo esc_html( $last_submission['response'] ); ?></pre>
-					<?php endif; ?>
-				<?php else : ?>
-					<p><?php esc_html_e( 'No live submissions recorded yet.', 'aqm-ghl' ); ?></p>
-				<?php endif; ?>
-
-				<?php submit_button(); ?>
+				<details style="margin: 1em 0; border: 1px solid #dcdcde; background: #fff;">
+					<summary style="cursor: pointer; padding: 10px 14px; background: #f6f7f7; font-weight: 600;">
+						<?php esc_html_e( 'Last live form submission', 'aqm-ghl' ); ?>
+						<?php if ( ! empty( $last_submission['timestamp'] ) ) : ?>
+							<span style="font-weight: normal; color: #646970; font-size: 12px;">— <?php echo esc_html( $last_submission['timestamp'] ); ?></span>
+						<?php endif; ?>
+					</summary>
+					<div style="padding: 12px 18px;">
+						<?php if ( ! empty( $last_submission['timestamp'] ) ) : ?>
+							<p><strong><?php esc_html_e( 'Status:', 'aqm-ghl' ); ?></strong> <?php echo esc_html( $last_submission['status'] ); ?></p>
+							<p><strong><?php esc_html_e( 'Message:', 'aqm-ghl' ); ?></strong> <?php echo esc_html( $last_submission['message'] ); ?></p>
+							<?php if ( $last_submission_context ) : ?>
+								<p><strong><?php esc_html_e( 'Context:', 'aqm-ghl' ); ?></strong></p>
+								<pre style="max-height: 240px; overflow: auto;"><?php echo esc_html( $last_submission_context ); ?></pre>
+							<?php endif; ?>
+							<?php if ( $last_submission_payload ) : ?>
+								<p><strong><?php esc_html_e( 'Request payload:', 'aqm-ghl' ); ?></strong></p>
+								<pre style="max-height: 240px; overflow: auto;"><?php echo esc_html( $last_submission_payload ); ?></pre>
+							<?php endif; ?>
+							<?php if ( ! empty( $last_submission['response'] ) ) : ?>
+								<p><strong><?php esc_html_e( 'Response body:', 'aqm-ghl' ); ?></strong></p>
+								<pre style="max-height: 240px; overflow: auto;"><?php echo esc_html( $last_submission['response'] ); ?></pre>
+							<?php endif; ?>
+						<?php else : ?>
+							<p><em><?php esc_html_e( 'No live form submissions recorded yet.', 'aqm-ghl' ); ?></em></p>
+						<?php endif; ?>
+					</div>
+				</details>
 			</form>
 
-			<h2><?php esc_html_e( 'Import / Export', 'aqm-ghl' ); ?></h2>
-			<p><?php esc_html_e( 'Export or import all settings (including GHL Location ID and Private Integration Token) as a JSON file.', 'aqm-ghl' ); ?></p>
+			<details style="margin: 1em 0; border: 1px solid #dcdcde; background: #fff;">
+				<summary style="cursor: pointer; padding: 10px 14px; background: #f6f7f7; font-weight: 600;">
+					<?php esc_html_e( 'Backup / restore settings', 'aqm-ghl' ); ?>
+				</summary>
+				<div style="padding: 12px 18px;">
+					<p><?php esc_html_e( 'Export all settings (including credentials) to a JSON file you can save or use to migrate to another WordPress install.', 'aqm-ghl' ); ?></p>
 
-			<table class="form-table" role="presentation">
-				<tr>
-					<th scope="row"><?php esc_html_e( 'Export', 'aqm-ghl' ); ?></th>
-					<td>
-						<a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=aqm_ghl_export_settings' ), 'aqm_ghl_export' ) ); ?>" class="button button-secondary">
-							<?php esc_html_e( 'Download settings (JSON)', 'aqm-ghl' ); ?>
-						</a>
-						<p class="description"><?php esc_html_e( 'Saves a copy of all current settings including credentials. Store the file securely.', 'aqm-ghl' ); ?></p>
-					</td>
-				</tr>
-				<tr>
-					<th scope="row"><?php esc_html_e( 'Import', 'aqm-ghl' ); ?></th>
-					<td>
-						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" enctype="multipart/form-data" class="aqm-ghl-import-form">
-							<input type="hidden" name="action" value="aqm_ghl_import_settings" />
-							<?php wp_nonce_field( 'aqm_ghl_import', 'aqm_ghl_import_nonce' ); ?>
-							<p>
-								<label for="aqm-ghl-import-file"><?php esc_html_e( 'Upload JSON file:', 'aqm-ghl' ); ?></label>
-								<input type="file" name="aqm_ghl_import_file" id="aqm-ghl-import-file" accept=".json,application/json" />
-							</p>
-							<p class="description"><?php esc_html_e( 'Or paste JSON below (from a previous export).', 'aqm-ghl' ); ?></p>
-							<p>
-								<textarea name="aqm_ghl_import_json" id="aqm-ghl-import-json" class="large-text code" rows="6" placeholder='{"version":1,"plugin":"aqm-ghl-connector","settings":{...}}'></textarea>
-							</p>
-							<p>
-								<button type="submit" class="button button-secondary"><?php esc_html_e( 'Import settings', 'aqm-ghl' ); ?></button>
-							</p>
-						</form>
-						<p class="description"><?php esc_html_e( 'Import replaces all current settings. Use only trusted export files.', 'aqm-ghl' ); ?></p>
-					</td>
-				</tr>
-			</table>
+					<table class="form-table" role="presentation">
+						<tr>
+							<th scope="row"><?php esc_html_e( 'Export', 'aqm-ghl' ); ?></th>
+							<td>
+								<a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=aqm_ghl_export_settings' ), 'aqm_ghl_export' ) ); ?>" class="button button-secondary">
+									<?php esc_html_e( 'Download settings (JSON)', 'aqm-ghl' ); ?>
+								</a>
+								<p class="description"><?php esc_html_e( 'Saves a copy of all current settings including credentials. Store the file securely.', 'aqm-ghl' ); ?></p>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row"><?php esc_html_e( 'Import', 'aqm-ghl' ); ?></th>
+							<td>
+								<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" enctype="multipart/form-data" class="aqm-ghl-import-form">
+									<input type="hidden" name="action" value="aqm_ghl_import_settings" />
+									<?php wp_nonce_field( 'aqm_ghl_import', 'aqm_ghl_import_nonce' ); ?>
+									<p>
+										<label for="aqm-ghl-import-file"><?php esc_html_e( 'Upload JSON file:', 'aqm-ghl' ); ?></label>
+										<input type="file" name="aqm_ghl_import_file" id="aqm-ghl-import-file" accept=".json,application/json" />
+									</p>
+									<p class="description"><?php esc_html_e( 'Or paste JSON below (from a previous export).', 'aqm-ghl' ); ?></p>
+									<p>
+										<textarea name="aqm_ghl_import_json" id="aqm-ghl-import-json" class="large-text code" rows="6" placeholder='{"version":1,"plugin":"aqm-ghl-connector","settings":{...}}'></textarea>
+									</p>
+									<p>
+										<button type="submit" class="button button-secondary"><?php esc_html_e( 'Import settings', 'aqm-ghl' ); ?></button>
+									</p>
+								</form>
+								<p class="description"><?php esc_html_e( 'Import replaces all current settings. Use only trusted export files.', 'aqm-ghl' ); ?></p>
+							</td>
+						</tr>
+					</table>
+				</div>
+			</details>
 		</div>
 		<?php
 	}
@@ -463,23 +483,20 @@ class AQM_GHL_Admin {
 		$expires_at       = isset( $settings['oauth_token_expires_at'] ) ? (int) $settings['oauth_token_expires_at'] : 0;
 		$active_mode      = function_exists( 'aqm_ghl_get_auth_mode' ) ? aqm_ghl_get_auth_mode() : 'pit';
 		?>
-		<h2 style="margin-top: 1.5em;"><?php esc_html_e( 'Authentication', 'aqm-ghl' ); ?></h2>
 
+		<?php // Status notices from the OAuth flow redirects ?>
 		<?php if ( 'connected' === $status ) : ?>
 			<div class="notice notice-success is-dismissible"><p>
 				<strong><?php esc_html_e( '✓ Connected to GoHighLevel.', 'aqm-ghl' ); ?></strong>
-				<?php esc_html_e( 'Plugin will use OAuth for API calls. Tokens auto-refresh.', 'aqm-ghl' ); ?>
+				<?php esc_html_e( 'Tokens will auto-refresh — you don\'t need to reconnect.', 'aqm-ghl' ); ?>
 			</p></div>
 		<?php elseif ( 'disconnected' === $status ) : ?>
 			<div class="notice notice-info is-dismissible"><p>
-				<?php esc_html_e( 'Disconnected from GoHighLevel. OAuth tokens cleared. Reconnect to resume OAuth, or use the legacy PIT below.', 'aqm-ghl' ); ?>
+				<?php esc_html_e( 'Disconnected from GoHighLevel. Reconnect below when you\'re ready.', 'aqm-ghl' ); ?>
 			</p></div>
 		<?php elseif ( '' !== $status ) : ?>
 			<div class="notice notice-error is-dismissible"><p>
-				<strong><?php
-					/* translators: %s: error status slug */
-					printf( esc_html__( 'OAuth flow error (%s).', 'aqm-ghl' ), esc_html( $status ) );
-				?></strong>
+				<strong><?php esc_html_e( 'GoHighLevel connection failed.', 'aqm-ghl' ); ?></strong>
 				<?php if ( '' !== $msg ) : ?>
 					<br><code style="white-space: pre-wrap;"><?php echo esc_html( $msg ); ?></code>
 				<?php endif; ?>
@@ -488,97 +505,105 @@ class AQM_GHL_Admin {
 
 		<?php if ( 'missing_secret' === $err ) : ?>
 			<div class="notice notice-error is-dismissible"><p>
-				<?php esc_html_e( 'Paste the AQM client_secret below and save before clicking Connect.', 'aqm-ghl' ); ?>
+				<?php esc_html_e( 'Paste the AQM Client Secret below and save before clicking Connect.', 'aqm-ghl' ); ?>
 			</p></div>
 		<?php endif; ?>
 
-		<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 2em;">
-
-			<!-- OAuth panel -->
-			<div style="border: 2px solid <?php echo $is_connected ? '#00a32a' : '#c3c4c7'; ?>; background: #fff; padding: 14px 18px;">
-				<h3 style="margin-top: 0;">
-					<?php esc_html_e( 'OAuth (recommended)', 'aqm-ghl' ); ?>
-					<?php if ( 'oauth' === $active_mode ) : ?>
-						<span style="background:#00a32a; color:#fff; font-size:11px; padding:2px 8px; border-radius:10px; vertical-align:middle;"><?php esc_html_e( 'ACTIVE', 'aqm-ghl' ); ?></span>
-					<?php endif; ?>
-				</h3>
-
-				<?php if ( $is_connected ) : ?>
-					<p style="margin-bottom: 0.5em;">
-						<strong><?php esc_html_e( 'Status:', 'aqm-ghl' ); ?></strong>
-						<span style="color:#00a32a;">✓ <?php esc_html_e( 'Connected', 'aqm-ghl' ); ?></span>
-					</p>
-					<p style="margin: 0.5em 0;">
-						<strong><?php esc_html_e( 'Sub-Account:', 'aqm-ghl' ); ?></strong>
-						<?php echo esc_html( $location_name ?: '(name unavailable)' ); ?>
-						<br><code style="font-size: 11px;"><?php echo esc_html( $location_id ); ?></code>
-					</p>
-					<?php if ( $expires_at ) : ?>
-						<p style="margin: 0.5em 0; font-size: 12px; color: #646970;">
+		<?php if ( $is_connected ) : ?>
+			<!-- COMPACT CONNECTED STATUS CARD -->
+			<div style="margin: 1em 0; border-left: 4px solid #00a32a; background: #fff; padding: 14px 18px; box-shadow: 0 1px 1px rgba(0,0,0,0.04);">
+				<div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+					<span style="font-size: 22px; line-height: 1;">✓</span>
+					<div style="flex: 1; min-width: 220px;">
+						<strong style="font-size: 15px;"><?php esc_html_e( 'Connected to GoHighLevel', 'aqm-ghl' ); ?></strong>
+						<div style="color: #50575e; font-size: 13px; margin-top: 2px;">
 							<?php
-							/* translators: %s: human time string */
-							printf( esc_html__( 'Access token refreshes by: %s', 'aqm-ghl' ), esc_html( gmdate( 'Y-m-d H:i', $expires_at ) . ' UTC' ) );
+							if ( $location_name ) {
+								printf(
+									/* translators: %s: sub-account display name */
+									esc_html__( 'Sub-account: %s', 'aqm-ghl' ),
+									'<strong>' . esc_html( $location_name ) . '</strong>'
+								);
+							} else {
+								echo '<code style="font-size: 11px;">' . esc_html( $location_id ) . '</code>';
+							}
 							?>
-						</p>
+						</div>
+					</div>
+					<div>
+						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block;">
+							<input type="hidden" name="action" value="aqm_oauth_start" />
+							<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
+							<button type="submit" class="button button-secondary"><?php esc_html_e( 'Reconnect', 'aqm-ghl' ); ?></button>
+						</form>
+						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block; margin-left: 4px;">
+							<input type="hidden" name="action" value="aqm_oauth_disconnect" />
+							<?php wp_nonce_field( 'aqm_oauth_disconnect' ); ?>
+							<button type="submit" class="button"><?php esc_html_e( 'Disconnect', 'aqm-ghl' ); ?></button>
+						</form>
+					</div>
+				</div>
+			</div>
+		<?php else : ?>
+			<!-- CONNECT SETUP FORM -->
+			<div style="margin: 1em 0; border: 2px solid #2271b1; background: #fff; padding: 18px 22px;">
+				<h2 style="margin: 0 0 8px;"><?php esc_html_e( 'Connect to GoHighLevel', 'aqm-ghl' ); ?></h2>
+				<p style="margin: 0 0 14px; color: #50575e;">
+					<?php esc_html_e( 'Click Connect below, sign in to GoHighLevel, and pick which sub-account this WordPress site should send form submissions to.', 'aqm-ghl' ); ?>
+				</p>
+
+				<?php
+				// Show the last 4 chars of the saved secret so the user can verify
+				// which value is active without exposing the full secret in the DOM.
+				$saved_secret  = isset( $settings['oauth_client_secret'] ) ? (string) $settings['oauth_client_secret'] : '';
+				$secret_hint   = '';
+				if ( '' !== $saved_secret ) {
+					$tail        = substr( $saved_secret, -4 );
+					$secret_hint = str_repeat( '•', 12 ) . $tail . ' (saved)';
+				}
+				?>
+				<form method="post" action="options.php" style="margin: 0 0 14px;">
+					<?php settings_fields( 'aqm_ghl_connector' ); ?>
+					<p style="margin: 0 0 8px;">
+						<label style="font-weight: 600; display: block; margin-bottom: 4px;"><?php esc_html_e( 'AQM Client Secret', 'aqm-ghl' ); ?></label>
+						<input type="password" name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[oauth_client_secret]" value="" placeholder="<?php echo $secret_hint ? esc_attr( $secret_hint ) : esc_attr__( 'Paste the secret provided by AQM', 'aqm-ghl' ); ?>" class="regular-text" style="width: 100%; max-width: 460px;" autocomplete="new-password" />
+						<span class="description" style="display: block; font-size: 12px; margin-top: 4px;">
+							<?php if ( $secret_hint ) : ?>
+								<?php
+								/* translators: %s: last 4 characters of the saved secret */
+								printf( esc_html__( 'Saved secret ends in %s. Leave blank to keep it, or paste a new value to replace.', 'aqm-ghl' ), '<code>' . esc_html( $tail ) . '</code>' );
+								?>
+							<?php else : ?>
+								<?php esc_html_e( 'Same value for every client install. Ask Justin / your AQM contact if you don\'t have it.', 'aqm-ghl' ); ?>
+							<?php endif; ?>
+						</span>
+					</p>
+					<p style="margin: 0;">
+						<button type="submit" class="button button-secondary"><?php esc_html_e( 'Save Secret', 'aqm-ghl' ); ?></button>
+					</p>
+				</form>
+
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin: 0; border-top: 1px solid #f0f0f1; padding-top: 14px;">
+					<input type="hidden" name="action" value="aqm_oauth_start" />
+					<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
+					<button type="submit" class="button button-primary button-hero" <?php disabled( empty( $settings['oauth_client_secret'] ) ); ?>>
+						<?php esc_html_e( 'Connect to GoHighLevel →', 'aqm-ghl' ); ?>
+					</button>
+					<?php if ( empty( $settings['oauth_client_secret'] ) ) : ?>
+						<span class="description" style="display: block; margin-top: 6px;">
+							<?php esc_html_e( 'Save the AQM Client Secret above first.', 'aqm-ghl' ); ?>
+						</span>
 					<?php endif; ?>
-
-					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block; margin-top: 0.5em;">
-						<input type="hidden" name="action" value="aqm_oauth_disconnect" />
-						<?php wp_nonce_field( 'aqm_oauth_disconnect' ); ?>
-						<button type="submit" class="button button-secondary"><?php esc_html_e( 'Disconnect', 'aqm-ghl' ); ?></button>
-					</form>
-					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block; margin-top: 0.5em;">
-						<input type="hidden" name="action" value="aqm_oauth_start" />
-						<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
-						<button type="submit" class="button"><?php esc_html_e( 'Reconnect', 'aqm-ghl' ); ?></button>
-					</form>
-
-				<?php else : ?>
-					<p><?php esc_html_e( 'Connect this WP site to a GHL sub-account via the AQM Marketplace App. No PIT pasting per client — pick the sub-account in GHL\'s OAuth window. Tokens auto-refresh forever.', 'aqm-ghl' ); ?></p>
-
-					<form method="post" action="options.php" style="margin-top: 0.5em;">
-						<?php settings_fields( 'aqm_ghl_connector' ); ?>
-						<p>
-							<label style="font-weight: 600;"><?php esc_html_e( 'AQM Client Secret', 'aqm-ghl' ); ?></label>
-							<input type="password" name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[oauth_client_secret]" value="" placeholder="<?php echo ! empty( $settings['oauth_client_secret'] ) ? '••••••••' : esc_attr__( 'Paste the AQM-provided client secret here', 'aqm-ghl' ); ?>" class="regular-text" style="width: 100%;" autocomplete="new-password" />
-							<span class="description" style="display:block; font-size:11px;">
-								<?php esc_html_e( 'Same value across all your client installs. Leave blank to keep the current value.', 'aqm-ghl' ); ?>
-							</span>
-						</p>
-						<p>
-							<button type="submit" class="button button-primary"><?php esc_html_e( 'Save Secret', 'aqm-ghl' ); ?></button>
-						</p>
-					</form>
-
-					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-top: 1em; padding-top: 1em; border-top: 1px solid #f0f0f1;">
-						<input type="hidden" name="action" value="aqm_oauth_start" />
-						<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
-						<button type="submit" class="button button-primary" <?php disabled( empty( $settings['oauth_client_secret'] ) ); ?>>
-							<?php esc_html_e( 'Connect to GoHighLevel →', 'aqm-ghl' ); ?>
-						</button>
-						<?php if ( empty( $settings['oauth_client_secret'] ) ) : ?>
-							<span class="description" style="display:block; margin-top:4px;"><?php esc_html_e( 'Save the client secret first.', 'aqm-ghl' ); ?></span>
-						<?php endif; ?>
-					</form>
-				<?php endif; ?>
+				</form>
 			</div>
 
-			<!-- Legacy PIT panel -->
-			<div style="border: 1px solid #c3c4c7; background: #fafafa; padding: 14px 18px;">
-				<h3 style="margin-top: 0;">
-					<?php esc_html_e( 'Legacy: Private Integration Token', 'aqm-ghl' ); ?>
-					<?php if ( 'pit' === $active_mode ) : ?>
-						<span style="background:#646970; color:#fff; font-size:11px; padding:2px 8px; border-radius:10px; vertical-align:middle;"><?php esc_html_e( 'ACTIVE', 'aqm-ghl' ); ?></span>
-					<?php endif; ?>
-				</h3>
-				<p style="font-size: 13px;">
-					<?php esc_html_e( 'For sites that haven\'t migrated yet. Configure the GHL Location ID and Private Integration Token in the section below. OAuth takes precedence when both are configured.', 'aqm-ghl' ); ?>
-				</p>
-				<p style="font-size: 12px; color: #646970;">
-					<?php esc_html_e( 'Active mode is auto-detected: if OAuth tokens are present, OAuth is used; otherwise the plugin falls back to PIT.', 'aqm-ghl' ); ?>
-				</p>
-			</div>
-		</div>
+			<?php if ( 'pit' === $active_mode ) : ?>
+				<div style="margin: 1em 0; padding: 10px 14px; background: #fffbeb; border-left: 3px solid #d39e00; font-size: 13px;">
+					<strong><?php esc_html_e( 'Currently using legacy Private Integration Token mode.', 'aqm-ghl' ); ?></strong>
+					<?php esc_html_e( 'It still works — but switching to OAuth above is recommended.', 'aqm-ghl' ); ?>
+				</div>
+			<?php endif; ?>
+		<?php endif; ?>
 		<?php
 	}
 
