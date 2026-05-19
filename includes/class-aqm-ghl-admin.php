@@ -220,6 +220,8 @@ class AQM_GHL_Admin {
 				</div>
 			<?php endif; ?>
 
+			<?php $this->render_authentication_section( $settings ); ?>
+
 			<form method="post" action="options.php" class="aqm-ghl-form">
 				<?php
 				settings_fields( 'aqm_ghl_connector' );
@@ -228,8 +230,8 @@ class AQM_GHL_Admin {
 					<tr>
 						<th scope="row"><label for="aqm-ghl-location-id"><?php esc_html_e( 'GHL Location ID', 'aqm-ghl' ); ?></label></th>
 						<td>
-							<input name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[location_id]" id="aqm-ghl-location-id" type="text" value="<?php echo esc_attr( $settings['location_id'] ); ?>" class="regular-text" required />
-							<p class="description"><?php esc_html_e( 'Paste the GoHighLevel Location ID.', 'aqm-ghl' ); ?></p>
+							<input name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[location_id]" id="aqm-ghl-location-id" type="text" value="<?php echo esc_attr( $settings['location_id'] ); ?>" class="regular-text" />
+							<p class="description"><?php esc_html_e( 'Legacy PIT mode only — leave empty if using OAuth (above).', 'aqm-ghl' ); ?></p>
 						</td>
 					</tr>
 					<tr>
@@ -439,6 +441,143 @@ class AQM_GHL_Admin {
 					</td>
 				</tr>
 			</table>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render the Authentication section — OAuth Connect flow + legacy PIT
+	 * fields side-by-side. Surfaces the result of any in-flight OAuth handoff
+	 * via the `aqm_oauth_status` URL parameter set by AQM_GHL_OAuth.
+	 *
+	 * @param array $settings Current plugin settings.
+	 */
+	private function render_authentication_section( $settings ) {
+		$status  = isset( $_GET['aqm_oauth_status'] )  ? sanitize_text_field( wp_unslash( $_GET['aqm_oauth_status'] ) )  : '';
+		$msg     = isset( $_GET['aqm_oauth_message'] ) ? sanitize_text_field( wp_unslash( $_GET['aqm_oauth_message'] ) ) : '';
+		$err     = isset( $_GET['aqm_oauth_err'] )     ? sanitize_text_field( wp_unslash( $_GET['aqm_oauth_err'] ) )     : '';
+
+		$is_connected     = class_exists( 'AQM_GHL_OAuth' ) ? AQM_GHL_OAuth::is_connected() : false;
+		$location_name    = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
+		$location_id      = isset( $settings['oauth_location_id'] )   ? (string) $settings['oauth_location_id']   : '';
+		$expires_at       = isset( $settings['oauth_token_expires_at'] ) ? (int) $settings['oauth_token_expires_at'] : 0;
+		$active_mode      = function_exists( 'aqm_ghl_get_auth_mode' ) ? aqm_ghl_get_auth_mode() : 'pit';
+		?>
+		<h2 style="margin-top: 1.5em;"><?php esc_html_e( 'Authentication', 'aqm-ghl' ); ?></h2>
+
+		<?php if ( 'connected' === $status ) : ?>
+			<div class="notice notice-success is-dismissible"><p>
+				<strong><?php esc_html_e( '✓ Connected to GoHighLevel.', 'aqm-ghl' ); ?></strong>
+				<?php esc_html_e( 'Plugin will use OAuth for API calls. Tokens auto-refresh.', 'aqm-ghl' ); ?>
+			</p></div>
+		<?php elseif ( 'disconnected' === $status ) : ?>
+			<div class="notice notice-info is-dismissible"><p>
+				<?php esc_html_e( 'Disconnected from GoHighLevel. OAuth tokens cleared. Reconnect to resume OAuth, or use the legacy PIT below.', 'aqm-ghl' ); ?>
+			</p></div>
+		<?php elseif ( '' !== $status ) : ?>
+			<div class="notice notice-error is-dismissible"><p>
+				<strong><?php
+					/* translators: %s: error status slug */
+					printf( esc_html__( 'OAuth flow error (%s).', 'aqm-ghl' ), esc_html( $status ) );
+				?></strong>
+				<?php if ( '' !== $msg ) : ?>
+					<br><code style="white-space: pre-wrap;"><?php echo esc_html( $msg ); ?></code>
+				<?php endif; ?>
+			</p></div>
+		<?php endif; ?>
+
+		<?php if ( 'missing_secret' === $err ) : ?>
+			<div class="notice notice-error is-dismissible"><p>
+				<?php esc_html_e( 'Paste the AQM client_secret below and save before clicking Connect.', 'aqm-ghl' ); ?>
+			</p></div>
+		<?php endif; ?>
+
+		<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 2em;">
+
+			<!-- OAuth panel -->
+			<div style="border: 2px solid <?php echo $is_connected ? '#00a32a' : '#c3c4c7'; ?>; background: #fff; padding: 14px 18px;">
+				<h3 style="margin-top: 0;">
+					<?php esc_html_e( 'OAuth (recommended)', 'aqm-ghl' ); ?>
+					<?php if ( 'oauth' === $active_mode ) : ?>
+						<span style="background:#00a32a; color:#fff; font-size:11px; padding:2px 8px; border-radius:10px; vertical-align:middle;"><?php esc_html_e( 'ACTIVE', 'aqm-ghl' ); ?></span>
+					<?php endif; ?>
+				</h3>
+
+				<?php if ( $is_connected ) : ?>
+					<p style="margin-bottom: 0.5em;">
+						<strong><?php esc_html_e( 'Status:', 'aqm-ghl' ); ?></strong>
+						<span style="color:#00a32a;">✓ <?php esc_html_e( 'Connected', 'aqm-ghl' ); ?></span>
+					</p>
+					<p style="margin: 0.5em 0;">
+						<strong><?php esc_html_e( 'Sub-Account:', 'aqm-ghl' ); ?></strong>
+						<?php echo esc_html( $location_name ?: '(name unavailable)' ); ?>
+						<br><code style="font-size: 11px;"><?php echo esc_html( $location_id ); ?></code>
+					</p>
+					<?php if ( $expires_at ) : ?>
+						<p style="margin: 0.5em 0; font-size: 12px; color: #646970;">
+							<?php
+							/* translators: %s: human time string */
+							printf( esc_html__( 'Access token refreshes by: %s', 'aqm-ghl' ), esc_html( gmdate( 'Y-m-d H:i', $expires_at ) . ' UTC' ) );
+							?>
+						</p>
+					<?php endif; ?>
+
+					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block; margin-top: 0.5em;">
+						<input type="hidden" name="action" value="aqm_oauth_disconnect" />
+						<?php wp_nonce_field( 'aqm_oauth_disconnect' ); ?>
+						<button type="submit" class="button button-secondary"><?php esc_html_e( 'Disconnect', 'aqm-ghl' ); ?></button>
+					</form>
+					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block; margin-top: 0.5em;">
+						<input type="hidden" name="action" value="aqm_oauth_start" />
+						<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
+						<button type="submit" class="button"><?php esc_html_e( 'Reconnect', 'aqm-ghl' ); ?></button>
+					</form>
+
+				<?php else : ?>
+					<p><?php esc_html_e( 'Connect this WP site to a GHL sub-account via the AQM Marketplace App. No PIT pasting per client — pick the sub-account in GHL\'s OAuth window. Tokens auto-refresh forever.', 'aqm-ghl' ); ?></p>
+
+					<form method="post" action="options.php" style="margin-top: 0.5em;">
+						<?php settings_fields( 'aqm_ghl_connector' ); ?>
+						<p>
+							<label style="font-weight: 600;"><?php esc_html_e( 'AQM Client Secret', 'aqm-ghl' ); ?></label>
+							<input type="password" name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[oauth_client_secret]" value="" placeholder="<?php echo ! empty( $settings['oauth_client_secret'] ) ? '••••••••' : esc_attr__( 'Paste the AQM-provided client secret here', 'aqm-ghl' ); ?>" class="regular-text" style="width: 100%;" autocomplete="new-password" />
+							<span class="description" style="display:block; font-size:11px;">
+								<?php esc_html_e( 'Same value across all your client installs. Leave blank to keep the current value.', 'aqm-ghl' ); ?>
+							</span>
+						</p>
+						<p>
+							<button type="submit" class="button button-primary"><?php esc_html_e( 'Save Secret', 'aqm-ghl' ); ?></button>
+						</p>
+					</form>
+
+					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-top: 1em; padding-top: 1em; border-top: 1px solid #f0f0f1;">
+						<input type="hidden" name="action" value="aqm_oauth_start" />
+						<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
+						<button type="submit" class="button button-primary" <?php disabled( empty( $settings['oauth_client_secret'] ) ); ?>>
+							<?php esc_html_e( 'Connect to GoHighLevel →', 'aqm-ghl' ); ?>
+						</button>
+						<?php if ( empty( $settings['oauth_client_secret'] ) ) : ?>
+							<span class="description" style="display:block; margin-top:4px;"><?php esc_html_e( 'Save the client secret first.', 'aqm-ghl' ); ?></span>
+						<?php endif; ?>
+					</form>
+				<?php endif; ?>
+			</div>
+
+			<!-- Legacy PIT panel -->
+			<div style="border: 1px solid #c3c4c7; background: #fafafa; padding: 14px 18px;">
+				<h3 style="margin-top: 0;">
+					<?php esc_html_e( 'Legacy: Private Integration Token', 'aqm-ghl' ); ?>
+					<?php if ( 'pit' === $active_mode ) : ?>
+						<span style="background:#646970; color:#fff; font-size:11px; padding:2px 8px; border-radius:10px; vertical-align:middle;"><?php esc_html_e( 'ACTIVE', 'aqm-ghl' ); ?></span>
+					<?php endif; ?>
+				</h3>
+				<p style="font-size: 13px;">
+					<?php esc_html_e( 'For sites that haven\'t migrated yet. Configure the GHL Location ID and Private Integration Token in the section below. OAuth takes precedence when both are configured.', 'aqm-ghl' ); ?>
+				</p>
+				<p style="font-size: 12px; color: #646970;">
+					<?php esc_html_e( 'Active mode is auto-detected: if OAuth tokens are present, OAuth is used; otherwise the plugin falls back to PIT.', 'aqm-ghl' ); ?>
+				</p>
+			</div>
 		</div>
 		<?php
 	}
@@ -797,6 +936,26 @@ class AQM_GHL_Admin {
 		$sanitized['workflow_form_binding'] = array_replace( $existing_bindings, $new_bindings );
 
 		$sanitized['enable_logging'] = ! empty( $input['enable_logging'] ) ? 1 : 0;
+
+		// OAuth client_secret (per-install paste, same value across all client sites).
+		// Treat as a token: strip tags + trim, but preserve all other characters.
+		// Blank submission keeps existing value (so saving other settings doesn't wipe it).
+		if ( array_key_exists( 'oauth_client_secret', $input ) ) {
+			$incoming = is_string( $input['oauth_client_secret'] ) ? trim( wp_strip_all_tags( (string) wp_unslash( $input['oauth_client_secret'] ) ) ) : '';
+			if ( '' !== $incoming ) {
+				$sanitized['oauth_client_secret'] = $incoming;
+			} elseif ( isset( $raw_existing['oauth_client_secret'] ) && is_string( $raw_existing['oauth_client_secret'] ) ) {
+				$sanitized['oauth_client_secret'] = $raw_existing['oauth_client_secret'];
+			}
+		}
+
+		// Auth mode is auto-detected by aqm_ghl_get_auth_mode() based on whether
+		// OAuth tokens exist. We don't expose a manual radio for now — the active
+		// mode badge in the UI just reflects detection. If we ever need a manual
+		// override, the input would land here.
+		if ( isset( $input['auth_mode'] ) && in_array( (string) $input['auth_mode'], array( 'oauth', 'pit', 'auto' ), true ) ) {
+			$sanitized['auth_mode'] = (string) $input['auth_mode'];
+		}
 
 		// Merge with existing so we never wipe keys (e.g. locations); ensures token update persists
 		$to_save = array_merge( $raw_existing, $sanitized );

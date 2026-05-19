@@ -4,6 +4,73 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+if ( ! function_exists( 'aqm_ghl_get_auth_mode' ) ) {
+	/**
+	 * Determine which auth path the plugin is currently configured to use.
+	 *
+	 * @return string 'oauth' when the OAuth Marketplace App is connected, else 'pit'.
+	 */
+	function aqm_ghl_get_auth_mode() {
+		$settings = aqm_ghl_get_settings();
+		$mode     = isset( $settings['auth_mode'] ) ? (string) $settings['auth_mode'] : '';
+
+		// Explicit override wins.
+		if ( 'oauth' === $mode || 'pit' === $mode ) {
+			return $mode;
+		}
+
+		// Auto-detect: if OAuth tokens are populated, use OAuth; otherwise fall back to PIT.
+		if ( ! empty( $settings['oauth_access_token'] ) && ! empty( $settings['oauth_refresh_token'] ) ) {
+			return 'oauth';
+		}
+		return 'pit';
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_get_active_auth' ) ) {
+	/**
+	 * Return the bearer token + location_id the rest of the plugin should use
+	 * for a GHL API request, based on the configured auth mode.
+	 *
+	 * @return array|\WP_Error array{token:string, location_id:string, mode:string} on success.
+	 */
+	function aqm_ghl_get_active_auth() {
+		$mode     = aqm_ghl_get_auth_mode();
+		$settings = aqm_ghl_get_settings();
+
+		if ( 'oauth' === $mode ) {
+			if ( ! class_exists( 'AQM_GHL_OAuth' ) ) {
+				return new \WP_Error( 'oauth_class_missing', 'AQM_GHL_OAuth class not loaded.' );
+			}
+			$token = AQM_GHL_OAuth::token();
+			if ( is_wp_error( $token ) ) {
+				return $token;
+			}
+			$location_id = isset( $settings['oauth_location_id'] ) ? (string) $settings['oauth_location_id'] : '';
+			if ( '' === $location_id ) {
+				return new \WP_Error( 'oauth_no_location', 'OAuth-connected but no location ID stored — reconnect to GoHighLevel.' );
+			}
+			return array(
+				'mode'        => 'oauth',
+				'token'       => $token,
+				'location_id' => $location_id,
+			);
+		}
+
+		// Legacy PIT path.
+		$token       = isset( $settings['private_token'] ) ? (string) $settings['private_token'] : '';
+		$location_id = isset( $settings['location_id'] )   ? (string) $settings['location_id']   : '';
+		if ( '' === $token || '' === $location_id ) {
+			return new \WP_Error( 'pit_not_configured', 'Plugin is in PIT mode but no Private Integration Token or Location ID is set.' );
+		}
+		return array(
+			'mode'        => 'pit',
+			'token'       => $token,
+			'location_id' => $location_id,
+		);
+	}
+}
+
 if ( ! function_exists( 'aqm_ghl_get_settings' ) ) {
 	/**
 	 * Retrieve plugin settings with defaults.

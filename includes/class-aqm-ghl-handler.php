@@ -58,13 +58,21 @@ class AQM_GHL_Handler {
 			return;
 		}
 
-		if ( empty( $settings['location_id'] ) || empty( $settings['private_token'] ) ) {
-			aqm_ghl_log( 'Missing configuration. Aborting send.' );
+		// Resolve which auth path to use (OAuth or legacy PIT) and get a usable
+		// bearer token + the bound Location ID. Single source of truth for the
+		// rest of this handler.
+		$auth = aqm_ghl_get_active_auth();
+		if ( is_wp_error( $auth ) ) {
+			aqm_ghl_log( 'Auth not configured: ' . $auth->get_error_message() );
 			aqm_ghl_store_last_submission_result(
 				array(
 					'success' => false,
 					'status'  => 0,
-					'message' => __( 'Submission aborted: missing Location ID or Private Integration Token.', 'aqm-ghl' ),
+					'message' => sprintf(
+						/* translators: %s: error detail */
+						__( 'Submission aborted: %s', 'aqm-ghl' ),
+						$auth->get_error_message()
+					),
 					'context' => array(
 						'entry_id' => (int) $entry_id,
 						'form_id'  => (int) $form_id,
@@ -73,6 +81,8 @@ class AQM_GHL_Handler {
 			);
 			return;
 		}
+		$location_id = $auth['location_id'];
+		$bearer      = $auth['token'];
 
 		if ( ! class_exists( 'FrmEntry' ) ) {
 			aqm_ghl_log( 'Formidable Forms not available when processing entry.' );
@@ -152,7 +162,7 @@ class AQM_GHL_Handler {
 		}
 
 		$payload = array(
-			'locationId' => $settings['location_id'],
+			'locationId' => $location_id,
 			'email'      => $email,
 			'phone'      => $phone,
 			'firstName'  => $first_name,
@@ -176,12 +186,14 @@ class AQM_GHL_Handler {
 			$payload['customFields'] = $custom_fields;
 		}
 
-		// Inject UTM parameters and GCLID using provisioned field IDs
-		$payload = $this->inject_utm_data( $payload, $settings['location_id'], $settings['private_token'] );
+		// Inject UTM parameters and GCLID using provisioned field IDs.
+		// The provisioner path uses customFields endpoints which require the
+		// same bearer token resolved above (works for both PIT and OAuth).
+		$payload = $this->inject_utm_data( $payload, $location_id, $bearer );
 
 		$payload = aqm_ghl_clean_payload( $payload );
 
-		$response = aqm_ghl_send_contact_payload( $payload, $settings['private_token'] );
+		$response = aqm_ghl_send_contact_payload( $payload, $bearer );
 
 		if ( is_wp_error( $response ) ) {
 			aqm_ghl_log(
@@ -300,8 +312,11 @@ class AQM_GHL_Handler {
 				(int) $entry_id,
 				(int) $form_id,
 				array(
-					'location_id'   => $settings['location_id'],
-					'private_token' => $settings['private_token'],
+					// Always pass the resolved values from the auth router so
+					// downstream listeners (form submitter, etc.) work in both
+					// PIT and OAuth modes without caring which is active.
+					'location_id'   => $location_id,
+					'private_token' => $bearer, // Misleading key name kept for back-compat; this is whatever bearer the active auth resolved to.
 				)
 			);
 		}
