@@ -40,6 +40,12 @@ class AQM_GHL_Opportunity_Pusher {
 			return;
 		}
 
+		// Global toggle: if not enabled, skip.
+		$settings = aqm_ghl_get_settings();
+		if ( empty( $settings['create_opportunity'] ) ) {
+			return;
+		}
+
 		// Auto-discover first pipeline + first stage. Cached for an hour so
 		// every submission doesn't hit GHL.
 		$pipelines = aqm_ghl_get_cached_pipelines( $location_id );

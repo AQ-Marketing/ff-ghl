@@ -360,7 +360,7 @@ class AQM_GHL_Admin {
 
 				<?php $this->render_workflows_section( $settings, $forms ); ?>
 
-				<?php // Opportunities section removed in v2.3.0 — configure opportunity creation inside GHL workflows (trigger: Contact Created). ?>
+				<?php $this->render_opportunities_section( $settings, $forms ); ?>
 
 				<h2 style="margin-top: 2em;"><?php esc_html_e( 'Optional settings', 'aqm-ghl' ); ?></h2>
 				<table class="form-table" role="presentation">
@@ -920,26 +920,9 @@ class AQM_GHL_Admin {
 	 * @param array $forms    Formidable form objects.
 	 */
 	private function render_opportunities_section( $settings, $forms ) {
-		$bindings   = isset( $settings['opportunity_form_binding'] ) && is_array( $settings['opportunity_form_binding'] ) ? $settings['opportunity_form_binding'] : array();
-		$selected   = isset( $settings['form_ids'] ) && is_array( $settings['form_ids'] ) ? array_map( 'absint', $settings['form_ids'] ) : array();
-		$opt_key    = AQM_GHL_OPTION_KEY;
+		$enabled = ! empty( $settings['create_opportunity'] );
+		$opt_key = AQM_GHL_OPTION_KEY;
 
-		// Pipelines come from whichever auth mode is active. For OAuth, the
-		// stored location_id is in oauth_location_id; for PIT it's location_id.
-		// Fall back to locations[0]['location_id'] on migrated installs where
-		// the top-level scalar was blanked out.
-		$oauth_connected = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
-		$location_id     = $oauth_connected
-			? ( isset( $settings['oauth_location_id'] ) ? (string) $settings['oauth_location_id'] : '' )
-			: ( isset( $settings['location_id'] ) ? (string) $settings['location_id'] : '' );
-		if ( '' === $location_id && ! empty( $settings['locations'] ) && is_array( $settings['locations'] ) ) {
-			$first_loc = reset( $settings['locations'] );
-			if ( is_array( $first_loc ) && ! empty( $first_loc['location_id'] ) ) {
-				$location_id = (string) $first_loc['location_id'];
-			}
-		}
-
-		$pipelines  = $location_id ? aqm_ghl_get_cached_pipelines( $location_id ) : array();
 		$form_index = array();
 		foreach ( $forms as $form ) {
 			$form_index[ (int) $form->id ] = $form;
@@ -947,224 +930,19 @@ class AQM_GHL_Admin {
 		?>
 		<h2 style="margin-top: 2em;"><?php esc_html_e( 'Create GHL opportunities (optional)', 'aqm-ghl' ); ?></h2>
 		<p class="description" style="margin-bottom: 1em;">
-			<?php esc_html_e( 'After each form submission creates a contact, optionally create a GHL opportunity in a pipeline + stage you pick per form. The opportunity is automatically linked to the contact.', 'aqm-ghl' ); ?>
+			<?php esc_html_e( 'When enabled, every form submission pushed to GHL also creates an opportunity in your sub-account\'s first pipeline + first stage (status: Open), linked to the new contact. Your agency manages stages and status from inside GHL.', 'aqm-ghl' ); ?>
 		</p>
-
-		<p>
-			<button type="button" class="button button-secondary" id="aqm-ghl-fetch-pipelines"><?php esc_html_e( 'Refresh pipelines from GHL', 'aqm-ghl' ); ?></button>
-			<span id="aqm-ghl-fetch-pipelines-result" class="notice inline" style="display:none; margin-left: 10px;"></span>
-		</p>
-
-		<?php if ( empty( $pipelines ) ) : ?>
-			<p style="padding: 14px; background: #f6f7f7; border-left: 3px solid #c3c4c7; color: #50575e;">
-				<em><?php esc_html_e( 'No pipelines loaded yet. Click "Refresh pipelines from GHL" above. (If you just added the opportunities scopes, click Disconnect then Connect in Authentication first so the OAuth token has the new permissions.)', 'aqm-ghl' ); ?></em>
-			</p>
-		<?php endif; ?>
-
-		<?php if ( empty( $selected ) ) : ?>
-			<p><em><?php esc_html_e( 'Pick one or more forms above to configure their opportunity destinations.', 'aqm-ghl' ); ?></em></p>
-			<?php return; ?>
-		<?php endif; ?>
-
-		<?php foreach ( $selected as $wp_form_id ) :
-			if ( ! isset( $form_index[ $wp_form_id ] ) ) { continue; }
-			$wp_form     = $form_index[ $wp_form_id ];
-			$binding     = isset( $bindings[ $wp_form_id ] ) ? $bindings[ $wp_form_id ] : array();
-			$enabled     = ! empty( $binding['enabled'] );
-			$pipeline_id = isset( $binding['pipeline_id'] ) ? (string) $binding['pipeline_id'] : '';
-			$stage_id    = isset( $binding['stage_id'] )    ? (string) $binding['stage_id']    : '';
-			$name_tpl    = isset( $binding['name_template'] ) ? (string) $binding['name_template'] : '{first_name} {last_name} — {form_name}';
-			$status      = isset( $binding['status'] )      ? (string) $binding['status']      : 'open';
-			$value       = isset( $binding['monetary_value'] ) ? (string) $binding['monetary_value'] : '';
-			$base_name   = $opt_key . '[opportunity_form_binding][' . (int) $wp_form_id . ']';
-		?>
-			<div class="aqm-ghl-opportunity-binding" data-form-id="<?php echo (int) $wp_form_id; ?>" style="margin: 12px 0; border: 1px solid #c3c4c7; background:#fff; padding: 12px 16px;">
-				<h3 style="margin-top:0;">
-					<?php
-					printf(
-						/* translators: 1: form name, 2: form ID */
-						esc_html__( '%1$s (WP form ID: %2$d)', 'aqm-ghl' ),
-						esc_html( (string) $wp_form->name ),
-						(int) $wp_form_id
-					);
-					?>
-				</h3>
-				<table class="form-table" role="presentation">
-					<tr>
-						<th scope="row"><?php esc_html_e( 'Create opportunity?', 'aqm-ghl' ); ?></th>
-						<td>
-							<label>
-								<input type="checkbox" name="<?php echo esc_attr( $base_name ); ?>[enabled]" value="1" <?php checked( $enabled ); ?> class="aqm-ghl-opp-enabled" />
-								<?php esc_html_e( 'Yes — create an opportunity in GHL on every submission of this form.', 'aqm-ghl' ); ?>
-							</label>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><label><?php esc_html_e( 'Pipeline', 'aqm-ghl' ); ?></label></th>
-						<td>
-							<?php if ( ! empty( $pipelines ) ) : ?>
-								<select name="<?php echo esc_attr( $base_name ); ?>[pipeline_id]" class="aqm-ghl-opp-pipeline regular-text" data-form-id="<?php echo (int) $wp_form_id; ?>">
-									<option value=""><?php esc_html_e( '— Select a pipeline —', 'aqm-ghl' ); ?></option>
-									<?php foreach ( $pipelines as $p ) : ?>
-										<option value="<?php echo esc_attr( $p['id'] ); ?>" <?php selected( $pipeline_id, $p['id'] ); ?>>
-											<?php echo esc_html( $p['name'] ?: $p['id'] ); ?>
-										</option>
-									<?php endforeach; ?>
-								</select>
-							<?php else : ?>
-								<?php if ( $pipeline_id ) : ?>
-									<input type="hidden" name="<?php echo esc_attr( $base_name ); ?>[pipeline_id]" value="<?php echo esc_attr( $pipeline_id ); ?>" />
-									<p class="description"><em><?php
-										/* translators: %s: stored pipeline ID */
-										printf( esc_html__( 'Saved pipeline ID: %s — refresh to edit.', 'aqm-ghl' ), '<code>' . esc_html( $pipeline_id ) . '</code>' );
-									?></em></p>
-								<?php else : ?>
-									<p class="description"><em><?php esc_html_e( 'Refresh pipelines above to pick one.', 'aqm-ghl' ); ?></em></p>
-								<?php endif; ?>
-							<?php endif; ?>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><label><?php esc_html_e( 'Stage', 'aqm-ghl' ); ?></label></th>
-						<td>
-							<select name="<?php echo esc_attr( $base_name ); ?>[stage_id]" class="aqm-ghl-opp-stage regular-text" data-form-id="<?php echo (int) $wp_form_id; ?>" data-current="<?php echo esc_attr( $stage_id ); ?>">
-								<option value=""><?php esc_html_e( '— Select pipeline first —', 'aqm-ghl' ); ?></option>
-								<?php
-								// Pre-populate stages for the currently-saved pipeline so the field renders correctly without JS.
-								if ( $pipeline_id ) {
-									foreach ( $pipelines as $p ) {
-										if ( $p['id'] === $pipeline_id ) {
-											foreach ( $p['stages'] as $s ) {
-												printf(
-													'<option value="%s" %s>%s</option>',
-													esc_attr( $s['id'] ),
-													selected( $stage_id, $s['id'], false ),
-													esc_html( $s['name'] ?: $s['id'] )
-												);
-											}
-											break;
-										}
-									}
-								}
-								?>
-							</select>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><label><?php esc_html_e( 'Opportunity name', 'aqm-ghl' ); ?></label></th>
-						<td>
-							<input type="text" name="<?php echo esc_attr( $base_name ); ?>[name_template]" value="<?php echo esc_attr( $name_tpl ); ?>" class="regular-text" style="width: 100%; max-width: 520px;" />
-							<p class="description">
-								<?php esc_html_e( 'Tokens you can use:', 'aqm-ghl' ); ?>
-								<code>{first_name}</code> <code>{last_name}</code> <code>{email}</code> <code>{phone}</code> <code>{form_name}</code> <code>{form_id}</code> <code>{entry_id}</code> <code>{site_name}</code>
-							</p>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><label><?php esc_html_e( 'Status', 'aqm-ghl' ); ?></label></th>
-						<td>
-							<select name="<?php echo esc_attr( $base_name ); ?>[status]">
-								<?php foreach ( array( 'open' => __( 'Open', 'aqm-ghl' ), 'won' => __( 'Won', 'aqm-ghl' ), 'lost' => __( 'Lost', 'aqm-ghl' ), 'abandoned' => __( 'Abandoned', 'aqm-ghl' ) ) as $val => $label ) : ?>
-									<option value="<?php echo esc_attr( $val ); ?>" <?php selected( $status, $val ); ?>><?php echo esc_html( $label ); ?></option>
-								<?php endforeach; ?>
-							</select>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><label><?php esc_html_e( 'Monetary value (optional)', 'aqm-ghl' ); ?></label></th>
-						<td>
-							<input type="text" name="<?php echo esc_attr( $base_name ); ?>[monetary_value]" value="<?php echo esc_attr( $value ); ?>" placeholder="e.g. 1500" class="regular-text" style="max-width: 200px;" />
-							<p class="description"><?php esc_html_e( 'Leave blank to skip. Plain number, no symbols.', 'aqm-ghl' ); ?></p>
-						</td>
-					</tr>
-				</table>
-			</div>
-		<?php endforeach; ?>
-
-		<?php // Inline JS: Refresh button + stage dropdown that depends on selected pipeline. ?>
-		<script>
-		(function(){
-			// === Stage dropdowns react to pipeline selection ===
-			// Build a lookup from the server-side data so we don't need another AJAX hop.
-			var pipelinesByForm = <?php echo wp_json_encode( $pipelines ); ?>;
-			function pipelineById(pid) {
-				if ( ! pipelinesByForm || ! pipelinesByForm.length ) return null;
-				for (var i = 0; i < pipelinesByForm.length; i++) {
-					if (pipelinesByForm[i].id === pid) return pipelinesByForm[i];
-				}
-				return null;
-			}
-			function rebuildStageDropdown(formId, selectedStageId) {
-				var $stage = document.querySelector('.aqm-ghl-opp-stage[data-form-id="' + formId + '"]');
-				var $pipeline = document.querySelector('.aqm-ghl-opp-pipeline[data-form-id="' + formId + '"]');
-				if ( ! $stage || ! $pipeline ) return;
-				var pid = $pipeline.value;
-				var keep = selectedStageId || $stage.value;
-				$stage.innerHTML = '';
-				var emptyOpt = document.createElement('option');
-				emptyOpt.value = '';
-				emptyOpt.textContent = pid ? '<?php echo esc_js( __( '— Select a stage —', 'aqm-ghl' ) ); ?>' : '<?php echo esc_js( __( '— Select pipeline first —', 'aqm-ghl' ) ); ?>';
-				$stage.appendChild(emptyOpt);
-				var p = pipelineById(pid);
-				if ( p && p.stages ) {
-					p.stages.forEach(function(s){
-						var o = document.createElement('option');
-						o.value = s.id;
-						o.textContent = s.name || s.id;
-						if ( keep && keep === s.id ) o.selected = true;
-						$stage.appendChild(o);
-					});
-				}
-			}
-			document.querySelectorAll('.aqm-ghl-opp-pipeline').forEach(function($p){
-				$p.addEventListener('change', function(){
-					rebuildStageDropdown($p.getAttribute('data-form-id'), '');
-				});
-			});
-
-			// === Refresh button ===
-			function wireRefresh() {
-				var btn = document.getElementById('aqm-ghl-fetch-pipelines');
-				var out = document.getElementById('aqm-ghl-fetch-pipelines-result');
-				if ( ! btn || ! out ) return;
-				if ( typeof aqmGhlSettings === 'undefined' ) {
-					console.error('[AQM GHL] aqmGhlSettings not loaded for pipelines refresh.');
-					return;
-				}
-				btn.addEventListener('click', function(){
-					out.style.display = 'inline';
-					out.className = 'notice inline';
-					out.textContent = '<?php echo esc_js( __( 'Fetching pipelines…', 'aqm-ghl' ) ); ?>';
-					var body = new FormData();
-					body.append('action', 'aqm_ghl_fetch_pipelines');
-					body.append('nonce', aqmGhlSettings.nonce);
-					fetch(aqmGhlSettings.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body })
-						.then(function(r){ return r.json(); })
-						.then(function(json){
-							if ( json && json.success ) {
-								out.className = 'notice notice-success inline';
-								out.textContent = ( json.data && json.data.message ) ? json.data.message : '<?php echo esc_js( __( 'Done. Reloading…', 'aqm-ghl' ) ); ?>';
-								setTimeout(function(){ window.location.reload(); }, 600);
-							} else {
-								out.className = 'notice notice-error inline';
-								out.textContent = ( json && json.data && json.data.message ) ? json.data.message : '<?php echo esc_js( __( 'Failed to fetch pipelines.', 'aqm-ghl' ) ); ?>';
-								console.error('[AQM GHL] fetch pipelines failed:', json);
-							}
-						})
-						.catch(function(e){
-							out.className = 'notice notice-error inline';
-							out.textContent = String(e);
-							console.error('[AQM GHL] fetch pipelines error:', e);
-						});
-				});
-			}
-			if (document.readyState === 'loading') {
-				document.addEventListener('DOMContentLoaded', wireRefresh);
-			} else {
-				wireRefresh();
-			}
-		})();
-		</script>
+		<table class="form-table" role="presentation">
+			<tr>
+				<th scope="row"><?php esc_html_e( 'Create opportunity?', 'aqm-ghl' ); ?></th>
+				<td>
+					<label>
+						<input type="checkbox" name="<?php echo esc_attr( $opt_key ); ?>[create_opportunity]" value="1" <?php checked( $enabled ); ?> />
+						<?php esc_html_e( 'Yes — create an opportunity in GHL on every form submission.', 'aqm-ghl' ); ?>
+					</label>
+				</td>
+			</tr>
+		</table>
 		<?php
 	}
 
@@ -1309,11 +1087,9 @@ class AQM_GHL_Admin {
 		$new_bindings      = isset( $input['workflow_form_binding'] ) ? aqm_ghl_sanitize_workflow_form_binding( $input['workflow_form_binding'] ) : array();
 		$sanitized['workflow_form_binding'] = array_replace( $existing_bindings, $new_bindings );
 
-		// Per-WP-form opportunity binding (pipeline + stage + name template
-		// + status + monetary value). Same preserve-across-saves behavior.
-		$existing_opp = isset( $existing['opportunity_form_binding'] ) && is_array( $existing['opportunity_form_binding'] ) ? $existing['opportunity_form_binding'] : array();
-		$new_opp      = isset( $input['opportunity_form_binding'] ) ? aqm_ghl_sanitize_opportunity_form_binding( $input['opportunity_form_binding'] ) : array();
-		$sanitized['opportunity_form_binding'] = array_replace( $existing_opp, $new_opp );
+		// Global "Create opportunity?" toggle — if on, every form submission
+		// also creates an opportunity (auto-picks first pipeline + first stage).
+		$sanitized['create_opportunity'] = ! empty( $input['create_opportunity'] ) ? 1 : 0;
 
 		$sanitized['enable_logging'] = ! empty( $input['enable_logging'] ) ? 1 : 0;
 
