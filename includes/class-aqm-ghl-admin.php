@@ -927,10 +927,18 @@ class AQM_GHL_Admin {
 
 		// Pipelines come from whichever auth mode is active. For OAuth, the
 		// stored location_id is in oauth_location_id; for PIT it's location_id.
+		// Fall back to locations[0]['location_id'] on migrated installs where
+		// the top-level scalar was blanked out.
 		$oauth_connected = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
 		$location_id     = $oauth_connected
 			? ( isset( $settings['oauth_location_id'] ) ? (string) $settings['oauth_location_id'] : '' )
 			: ( isset( $settings['location_id'] ) ? (string) $settings['location_id'] : '' );
+		if ( '' === $location_id && ! empty( $settings['locations'] ) && is_array( $settings['locations'] ) ) {
+			$first_loc = reset( $settings['locations'] );
+			if ( is_array( $first_loc ) && ! empty( $first_loc['location_id'] ) ) {
+				$location_id = (string) $first_loc['location_id'];
+			}
+		}
 
 		$pipelines  = $location_id ? aqm_ghl_get_cached_pipelines( $location_id ) : array();
 		$form_index = array();
