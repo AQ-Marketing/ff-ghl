@@ -5,78 +5,92 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Optionally creates an opportunity in GHL for every Formidable submission,
- * linked to the newly-created contact. Listens on the `aqm_ghl_contact_created`
- * action fired by AQM_GHL_Handler — so we always have a contactId in hand.
+ * Creates an opportunity in GHL for every Formidable submission, linked to
+ * the newly-created contact. Listens on the `aqm_ghl_contact_created` action
+ * fired by AQM_GHL_Handler.
  *
- * Per-form binding:
- *   - enabled
- *   - pipeline_id (required)
- *   - stage_id (required)
- *   - name_template (default: "{first_name} {last_name} — {form_name}")
- *   - status (open|won|lost|abandoned)
- *   - monetary_value (optional)
+ * No per-form config — auto-picks the FIRST pipeline + FIRST stage in the
+ * sub-account. Agency manages the opportunity from there (move stages,
+ * change status, etc.).
  *
- * Template tokens: {first_name}, {last_name}, {email}, {phone},
- * {form_name}, {form_id}, {entry_id}, {site_name}
+ * Opportunity name format: "{first_name} {last_name} — {form_name}"
+ * Status: open
+ *
+ * Requires the auth token to have opportunities.write + opportunities.readonly.
  */
 class AQM_GHL_Opportunity_Pusher {
 
 	public function __construct() {
-		add_action( 'aqm_ghl_contact_created', array( $this, 'maybe_create_opportunity' ), 20, 4 );
+		add_action( 'aqm_ghl_contact_created', array( $this, 'create_opportunity' ), 20, 4 );
 	}
 
 	/**
-	 * Create the opportunity if configured for this form.
-	 *
 	 * @param string $contact_id GHL contact ID.
 	 * @param int    $entry_id   Formidable entry ID.
 	 * @param int    $form_id    Formidable form ID.
 	 * @param array  $location   { location_id, private_token } — resolved by the auth router.
 	 */
-	public function maybe_create_opportunity( $contact_id, $entry_id, $form_id, $location ) {
-		$contact_id = (string) $contact_id;
-		$form_id    = (int) $form_id;
-
-		if ( '' === $contact_id || ! $form_id ) {
-			return;
-		}
-
-		$binding = aqm_ghl_get_opportunity_binding_for_form( $form_id );
-		if ( empty( $binding['enabled'] ) || empty( $binding['pipeline_id'] ) || empty( $binding['stage_id'] ) ) {
-			return;
-		}
-
+	public function create_opportunity( $contact_id, $entry_id, $form_id, $location ) {
+		$contact_id  = (string) $contact_id;
+		$form_id     = (int) $form_id;
 		$token       = isset( $location['private_token'] ) ? (string) $location['private_token'] : '';
 		$location_id = isset( $location['location_id'] )   ? (string) $location['location_id']   : '';
-		if ( '' === $token || '' === $location_id ) {
+
+		if ( '' === $contact_id || ! $form_id || '' === $token || '' === $location_id ) {
+			return;
+		}
+
+		// Auto-discover first pipeline + first stage. Cached for an hour so
+		// every submission doesn't hit GHL.
+		$pipelines = aqm_ghl_get_cached_pipelines( $location_id );
+		if ( empty( $pipelines ) ) {
+			$fetched = aqm_ghl_fetch_pipelines( $location_id, $token, true );
+			if ( is_wp_error( $fetched ) ) {
+				aqm_ghl_log(
+					'Opportunity push skipped: could not load pipelines.',
+					array(
+						'entry_id'   => $entry_id,
+						'form_id'    => $form_id,
+						'contact_id' => $contact_id,
+						'error'      => $fetched->get_error_message(),
+					)
+				);
+				return;
+			}
+			$pipelines = $fetched;
+		}
+
+		if ( empty( $pipelines ) || empty( $pipelines[0]['id'] ) || empty( $pipelines[0]['stages'][0]['id'] ) ) {
 			aqm_ghl_log(
-				'Opportunity push skipped: missing token or location_id from auth router.',
+				'Opportunity push skipped: sub-account has no pipelines with stages set up.',
 				array( 'entry_id' => $entry_id, 'form_id' => $form_id )
 			);
 			return;
 		}
 
-		// Resolve template tokens from the entry data + form metadata.
+		$pipeline    = $pipelines[0];
+		$pipeline_id = (string) $pipeline['id'];
+		$stage_id    = (string) $pipeline['stages'][0]['id'];
+
+		// Build the opportunity name from the entry data.
 		$tokens = $this->build_token_data( $entry_id, $form_id );
-		$name   = $this->render_template( $binding['name_template'], $tokens );
+		$name   = trim( sprintf( '%s %s', $tokens['first_name'], $tokens['last_name'] ) );
 		if ( '' === $name ) {
-			$name = $tokens['form_name'] ?: 'Opportunity';
+			$name = $tokens['email'] ?: ( $tokens['form_name'] ?: 'New Lead' );
+		}
+		if ( '' !== $tokens['form_name'] ) {
+			$name .= ' — ' . $tokens['form_name'];
 		}
 
 		$payload = array(
 			'locationId'      => $location_id,
-			'pipelineId'      => $binding['pipeline_id'],
-			'pipelineStageId' => $binding['stage_id'],
+			'pipelineId'      => $pipeline_id,
+			'pipelineStageId' => $stage_id,
 			'name'            => $name,
-			'status'          => $binding['status'] ?: 'open',
+			'status'          => 'open',
 			'contactId'       => $contact_id,
 			'source'          => $tokens['form_name'] ?: 'WordPress',
 		);
-
-		if ( '' !== $binding['monetary_value'] ) {
-			$payload['monetaryValue'] = (float) $binding['monetary_value'];
-		}
 
 		$result = aqm_ghl_create_opportunity( $payload, $token );
 
@@ -87,8 +101,8 @@ class AQM_GHL_Opportunity_Pusher {
 					'entry_id'    => $entry_id,
 					'form_id'     => $form_id,
 					'contact_id'  => $contact_id,
-					'pipeline_id' => $binding['pipeline_id'],
-					'stage_id'    => $binding['stage_id'],
+					'pipeline_id' => $pipeline_id,
+					'stage_id'    => $stage_id,
 					'error'       => $result->get_error_message(),
 				)
 			);
@@ -103,8 +117,8 @@ class AQM_GHL_Opportunity_Pusher {
 				'entry_id'    => $entry_id,
 				'form_id'     => $form_id,
 				'contact_id'  => $contact_id,
-				'pipeline_id' => $binding['pipeline_id'],
-				'stage_id'    => $binding['stage_id'],
+				'pipeline_id' => $pipeline_id,
+				'stage_id'    => $stage_id,
 				'status'      => $code,
 				'body'        => isset( $result['body'] ) ? mb_substr( (string) $result['body'], 0, 500 ) : '',
 			)
@@ -112,12 +126,7 @@ class AQM_GHL_Opportunity_Pusher {
 	}
 
 	/**
-	 * Build the token dictionary used for name template substitution. Pulls
-	 * mapped Formidable values (first/last/email/phone) plus form + site
-	 * metadata.
-	 *
-	 * @param int $entry_id Formidable entry ID.
-	 * @param int $form_id  Formidable form ID.
+	 * Pull first_name / last_name / email / phone / form_name from the entry.
 	 *
 	 * @return array<string,string>
 	 */
@@ -127,10 +136,7 @@ class AQM_GHL_Opportunity_Pusher {
 			'last_name'  => '',
 			'email'      => '',
 			'phone'      => '',
-			'form_id'    => (string) $form_id,
-			'entry_id'   => (string) $entry_id,
 			'form_name'  => '',
-			'site_name'  => get_bloginfo( 'name' ),
 		);
 
 		if ( class_exists( 'FrmEntry' ) ) {
@@ -160,28 +166,5 @@ class AQM_GHL_Opportunity_Pusher {
 		}
 
 		return $data;
-	}
-
-	/**
-	 * Substitute {token} placeholders in a string with values from $tokens.
-	 * Unknown tokens are stripped. Trailing separators ("— ", " - ", etc.)
-	 * left dangling by empty tokens get cleaned up.
-	 *
-	 * @param string $template Template containing {token} placeholders.
-	 * @param array  $tokens   Token → value map.
-	 *
-	 * @return string
-	 */
-	private function render_template( $template, $tokens ) {
-		$out = (string) $template;
-		foreach ( $tokens as $key => $val ) {
-			$out = str_replace( '{' . $key . '}', (string) $val, $out );
-		}
-		// Strip any unmatched {something} tokens.
-		$out = preg_replace( '/\{[^}]+\}/', '', $out );
-		// Clean up dangling separators (e.g. "  — " left over from missing names).
-		$out = preg_replace( '/\s+/u', ' ', $out );
-		$out = trim( $out, " \t\n\r\0\x0B-—|·:" );
-		return $out;
 	}
 }

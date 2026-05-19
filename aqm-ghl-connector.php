@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AQM GHL Formidable Connector
  * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts. Supports two auth modes: legacy Private Integration Token (per sub-account) or OAuth via the AQM Marketplace App (per-install Connect button, tokens auto-refresh forever).
- * Version:     2.3.0
+ * Version:     2.3.1
  * Author: AQMarketing
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'AQM_GHL_CONNECTOR_VERSION', '2.3.0' );
+define( 'AQM_GHL_CONNECTOR_VERSION', '2.3.1' );
 define( 'AQM_GHL_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AQM_GHL_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 define( 'AQM_GHL_OPTION_KEY', 'aqm_ghl_connector_settings' );
@@ -152,10 +152,8 @@ function aqm_ghl_connector_init() {
 	new AQM_GHL_Admin();
 	new AQM_GHL_Handler();
 	new AQM_GHL_Form_Submitter();
+	new AQM_GHL_Opportunity_Pusher();
 	new AQM_GHL_OAuth();
-	// Opportunity-pusher removed in v2.3.0 — handle opportunity creation in
-	// GHL workflows (trigger: Contact Created) instead. Class file kept for
-	// reference; not instantiated.
 
 	// Updates pull from a public release-mirror repo — no token required.
 	// Source repo (private) publishes built ZIP releases here on each tag push.
