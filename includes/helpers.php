@@ -1187,3 +1187,226 @@ if ( ! function_exists( 'aqm_ghl_sanitize_workflow_form_binding' ) ) {
 	}
 }
 
+if ( ! function_exists( 'aqm_ghl_fetch_pipelines' ) ) {
+	/**
+	 * Fetch the list of opportunity pipelines (with their stages) for a location.
+	 *
+	 * Endpoint: GET https://services.leadconnectorhq.com/opportunities/pipelines?locationId=...
+	 * Required scope: opportunities.readonly
+	 *
+	 * @param string $location_id GHL location ID.
+	 * @param string $token       Bearer token (PIT or OAuth access token).
+	 * @param bool   $force       Skip cache and hit the API.
+	 *
+	 * @return array|\WP_Error Array of { id, name, stages: [{id, name, position}] } or WP_Error.
+	 */
+	function aqm_ghl_fetch_pipelines( $location_id, $token, $force = false ) {
+		$cache_key = 'aqm_ghl_pipelines_' . md5( (string) $location_id );
+		if ( ! $force ) {
+			$cached = get_transient( $cache_key );
+			if ( is_array( $cached ) ) {
+				return $cached;
+			}
+		}
+		$url = add_query_arg(
+			array( 'locationId' => $location_id ),
+			'https://services.leadconnectorhq.com/opportunities/pipelines'
+		);
+		$response = wp_remote_get(
+			$url,
+			array(
+				'headers' => array(
+					'Authorization' => 'Bearer ' . $token,
+					'Version'       => '2021-07-28',
+					'Accept'        => 'application/json',
+				),
+				'timeout' => 15,
+			)
+		);
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+		$code = wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+		if ( $code < 200 || $code >= 300 ) {
+			$msg = is_array( $body ) && isset( $body['message'] ) ? $body['message'] : wp_remote_retrieve_body( $response );
+			if ( 401 === (int) $code || 403 === (int) $code ) {
+				$msg = sprintf(
+					/* translators: 1: HTTP status, 2: raw error */
+					__( 'GHL refused the request (HTTP %1$d). Your token may be missing the "opportunities.readonly" scope. For OAuth, click Disconnect then Connect again to refresh tokens with the new scope. (Raw: %2$s)', 'aqm-ghl' ),
+					(int) $code,
+					$msg
+				);
+			}
+			return new \WP_Error( 'ghl_pipelines_error', $msg );
+		}
+		if ( ! is_array( $body ) || ! isset( $body['pipelines'] ) || ! is_array( $body['pipelines'] ) ) {
+			return new \WP_Error( 'ghl_pipelines_invalid', __( 'Unexpected response from GHL pipelines endpoint.', 'aqm-ghl' ) );
+		}
+		$out = array();
+		foreach ( $body['pipelines'] as $pipeline ) {
+			if ( empty( $pipeline['id'] ) ) {
+				continue;
+			}
+			$stages = array();
+			if ( ! empty( $pipeline['stages'] ) && is_array( $pipeline['stages'] ) ) {
+				foreach ( $pipeline['stages'] as $stage ) {
+					if ( empty( $stage['id'] ) ) {
+						continue;
+					}
+					$stages[] = array(
+						'id'       => sanitize_text_field( (string) $stage['id'] ),
+						'name'     => isset( $stage['name'] ) ? sanitize_text_field( (string) $stage['name'] ) : '',
+						'position' => isset( $stage['position'] ) ? (int) $stage['position'] : 0,
+					);
+				}
+			}
+			$out[] = array(
+				'id'     => sanitize_text_field( (string) $pipeline['id'] ),
+				'name'   => isset( $pipeline['name'] ) ? sanitize_text_field( (string) $pipeline['name'] ) : '',
+				'stages' => $stages,
+			);
+		}
+		set_transient( $cache_key, $out, HOUR_IN_SECONDS );
+		return $out;
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_get_cached_pipelines' ) ) {
+	/**
+	 * Return cached pipelines without forcing an API call.
+	 *
+	 * @param string $location_id GHL location ID.
+	 *
+	 * @return array
+	 */
+	function aqm_ghl_get_cached_pipelines( $location_id ) {
+		if ( empty( $location_id ) ) {
+			return array();
+		}
+		$cached = get_transient( 'aqm_ghl_pipelines_' . md5( (string) $location_id ) );
+		return is_array( $cached ) ? $cached : array();
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_create_opportunity' ) ) {
+	/**
+	 * Create an opportunity in GHL.
+	 *
+	 * Endpoint: POST https://services.leadconnectorhq.com/opportunities/
+	 * Required scope: opportunities.write
+	 *
+	 * @param array  $payload Opportunity payload.
+	 * @param string $token   Bearer token.
+	 *
+	 * @return array|\WP_Error array{status:int, body:string} on success, WP_Error on transport failure.
+	 */
+	function aqm_ghl_create_opportunity( $payload, $token ) {
+		$response = wp_remote_post(
+			'https://services.leadconnectorhq.com/opportunities/',
+			array(
+				'headers' => array(
+					'Authorization' => 'Bearer ' . $token,
+					'Version'       => '2021-07-28',
+					'Accept'        => 'application/json',
+					'Content-Type'  => 'application/json',
+				),
+				'timeout' => 15,
+				'body'    => wp_json_encode( $payload ),
+			)
+		);
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+		return array(
+			'status' => (int) wp_remote_retrieve_response_code( $response ),
+			'body'   => (string) wp_remote_retrieve_body( $response ),
+		);
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_get_opportunity_binding_for_form' ) ) {
+	/**
+	 * Retrieve the opportunity-creation binding for a given WordPress form.
+	 *
+	 * Stored at $settings['opportunity_form_binding'][ $wp_form_id ] with shape:
+	 *   - enabled, pipeline_id, stage_id, name_template, status, monetary_value
+	 *
+	 * @param int $wp_form_id Formidable form ID.
+	 *
+	 * @return array Empty array when nothing is configured.
+	 */
+	function aqm_ghl_get_opportunity_binding_for_form( $wp_form_id ) {
+		$wp_form_id = absint( $wp_form_id );
+		if ( ! $wp_form_id ) {
+			return array();
+		}
+		$settings = aqm_ghl_get_settings();
+		if ( empty( $settings['opportunity_form_binding'] ) || ! is_array( $settings['opportunity_form_binding'] ) ) {
+			return array();
+		}
+		$binding = isset( $settings['opportunity_form_binding'][ $wp_form_id ] ) ? $settings['opportunity_form_binding'][ $wp_form_id ] : null;
+		if ( ! is_array( $binding ) ) {
+			return array();
+		}
+		return wp_parse_args(
+			$binding,
+			array(
+				'enabled'        => false,
+				'pipeline_id'    => '',
+				'stage_id'       => '',
+				'name_template'  => '{first_name} {last_name} — {form_name}',
+				'status'         => 'open',
+				'monetary_value' => '',
+			)
+		);
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_sanitize_opportunity_form_binding' ) ) {
+	/**
+	 * Sanitize the per-WP-form opportunity binding map for storage.
+	 *
+	 * @param array $raw Raw input.
+	 *
+	 * @return array
+	 */
+	function aqm_ghl_sanitize_opportunity_form_binding( $raw ) {
+		if ( empty( $raw ) || ! is_array( $raw ) ) {
+			return array();
+		}
+		$valid_statuses = array( 'open', 'won', 'lost', 'abandoned' );
+		$clean = array();
+		$count = 0;
+		foreach ( $raw as $wp_form_id => $binding ) {
+			if ( $count++ > 200 || ! is_array( $binding ) ) {
+				continue;
+			}
+			$wp_form_id = absint( $wp_form_id );
+			if ( ! $wp_form_id ) {
+				continue;
+			}
+			$status = isset( $binding['status'] ) ? (string) $binding['status'] : 'open';
+			if ( ! in_array( $status, $valid_statuses, true ) ) {
+				$status = 'open';
+			}
+			$monetary = '';
+			if ( isset( $binding['monetary_value'] ) && '' !== trim( (string) $binding['monetary_value'] ) ) {
+				$num = (float) str_replace( array( ',', '$' ), '', (string) $binding['monetary_value'] );
+				if ( is_finite( $num ) && $num >= 0 ) {
+					$monetary = (string) $num;
+				}
+			}
+			$clean[ $wp_form_id ] = array(
+				'enabled'        => ! empty( $binding['enabled'] ),
+				'pipeline_id'    => isset( $binding['pipeline_id'] ) ? sanitize_text_field( (string) $binding['pipeline_id'] ) : '',
+				'stage_id'       => isset( $binding['stage_id'] ) ? sanitize_text_field( (string) $binding['stage_id'] ) : '',
+				'name_template'  => isset( $binding['name_template'] ) ? sanitize_text_field( (string) $binding['name_template'] ) : '{first_name} {last_name} — {form_name}',
+				'status'         => $status,
+				'monetary_value' => $monetary,
+			);
+		}
+		return $clean;
+	}
+}
+

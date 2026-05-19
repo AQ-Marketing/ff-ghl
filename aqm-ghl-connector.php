@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AQM GHL Formidable Connector
  * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts. Supports two auth modes: legacy Private Integration Token (per sub-account) or OAuth via the AQM Marketplace App (per-install Connect button, tokens auto-refresh forever).
- * Version:     2.1.1
+ * Version:     2.2.0
  * Author: AQMarketing
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'AQM_GHL_CONNECTOR_VERSION', '2.1.1' );
+define( 'AQM_GHL_CONNECTOR_VERSION', '2.2.0' );
 define( 'AQM_GHL_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AQM_GHL_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 define( 'AQM_GHL_OPTION_KEY', 'aqm_ghl_connector_settings' );
@@ -22,7 +22,7 @@ define( 'AQM_GHL_LAST_SUBMISSION_RESULT_KEY', 'aqm_ghl_last_submission_result' )
 define( 'AQM_GHL_OAUTH_CLIENT_ID',    '6a0c6ed1f95594032b8df9c2-mpcq4xq8' );
 define( 'AQM_GHL_OAUTH_AUTHORIZE_URL', 'https://marketplace.gohighlevel.com/v2/oauth/chooselocation' );
 define( 'AQM_GHL_OAUTH_TOKEN_URL',     'https://services.leadconnectorhq.com/oauth/token' );
-define( 'AQM_GHL_OAUTH_SCOPES',        'contacts.readonly contacts.write workflows.readonly locations/customFields.readonly locations/customFields.write' );
+define( 'AQM_GHL_OAUTH_SCOPES',        'contacts.readonly contacts.write workflows.readonly locations/customFields.readonly locations/customFields.write opportunities.readonly opportunities.write' );
 define( 'AQM_GHL_OAUTH_CALLBACK_ACTION', 'aqm_oauth_callback' ); // No 'ghl' in name per GHL whitelabel rule.
 
 // DIAGNOSTIC: capture fatal + memory usage at each WP boot phase on settings page.
@@ -133,6 +133,7 @@ require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-custom-field-provis
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-admin.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-handler.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-form-submitter.php';
+require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-opportunity-pusher.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-oauth.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-updater.php';
 
@@ -151,6 +152,7 @@ function aqm_ghl_connector_init() {
 	new AQM_GHL_Admin();
 	new AQM_GHL_Handler();
 	new AQM_GHL_Form_Submitter();
+	new AQM_GHL_Opportunity_Pusher();
 	new AQM_GHL_OAuth();
 
 	// Updates pull from a public release-mirror repo — no token required.
