@@ -243,6 +243,8 @@ class AQM_GHL_Admin {
 				settings_fields( 'aqm_ghl_connector' );
 				?>
 
+				<?php $this->render_opportunities_section( $settings, $forms ); ?>
+
 				<?php // Legacy Private Integration Token fields are no longer surfaced in the UI
 				// since AQM has fully migrated to the OAuth Marketplace App flow. The underlying
 				// values still persist in settings (so v1.x sites that haven't migrated yet keep
@@ -364,8 +366,6 @@ class AQM_GHL_Admin {
 					</summary>
 					<?php $this->render_workflows_section( $settings, $forms ); ?>
 				</details>
-
-				<?php $this->render_opportunities_section( $settings, $forms ); ?>
 
 				<h2 style="margin-top: 2em;"><?php esc_html_e( 'Optional settings', 'aqm-ghl' ); ?></h2>
 				<table class="form-table" role="presentation">
