@@ -22,7 +22,6 @@ class AQM_GHL_Admin {
 		add_action( 'wp_ajax_aqm_ghl_provision_fields', array( $this, 'ajax_provision_fields' ) );
 		add_action( 'wp_ajax_aqm_ghl_fetch_ghl_fields', array( $this, 'ajax_fetch_ghl_fields' ) );
 		add_action( 'wp_ajax_aqm_ghl_fetch_workflows', array( $this, 'ajax_fetch_workflows' ) );
-		add_action( 'wp_ajax_aqm_ghl_fetch_pipelines', array( $this, 'ajax_fetch_pipelines' ) );
 		add_action( 'admin_post_aqm_ghl_export_settings', array( $this, 'handle_export_settings' ) );
 		add_action( 'admin_post_aqm_ghl_import_settings', array( $this, 'handle_import_settings' ) );
 	}
@@ -361,7 +360,7 @@ class AQM_GHL_Admin {
 
 				<?php $this->render_workflows_section( $settings, $forms ); ?>
 
-				<?php $this->render_opportunities_section( $settings, $forms ); ?>
+				<?php // Opportunities section removed in v2.3.0 — configure opportunity creation inside GHL workflows (trigger: Contact Created). ?>
 
 				<h2 style="margin-top: 2em;"><?php esc_html_e( 'Optional settings', 'aqm-ghl' ); ?></h2>
 				<table class="form-table" role="presentation">
