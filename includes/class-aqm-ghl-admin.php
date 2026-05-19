@@ -254,10 +254,34 @@ class AQM_GHL_Admin {
 					<tr>
 						<th scope="row"><label><?php esc_html_e( 'Which forms to send', 'aqm-ghl' ); ?></label></th>
 						<td>
+							<?php if ( ! empty( $forms ) ) : ?>
+								<?php
+								$total_forms    = count( $forms );
+								$selected_ids   = isset( $settings['form_ids'] ) ? array_map( 'absint', (array) $settings['form_ids'] ) : array();
+								$selected_count = count( $selected_ids );
+								$all_checked    = $total_forms > 0 && $selected_count >= $total_forms;
+								?>
+								<label class="aqm-ghl-form-checkbox-item aqm-ghl-form-checkbox-select-all" style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #dcdcde; font-weight: 600;">
+									<input
+										type="checkbox"
+										id="aqm-ghl-select-all-forms"
+										<?php checked( $all_checked ); ?>
+									/>
+									<span class="aqm-ghl-form-checkbox-label">
+										<?php esc_html_e( 'Select all forms', 'aqm-ghl' ); ?>
+										<span class="description" style="font-size: 11px; color: #646970; font-weight: normal;">
+											(<?php
+											/* translators: 1: selected count, 2: total count */
+											printf( esc_html__( '%1$d of %2$d selected', 'aqm-ghl' ), (int) $selected_count, (int) $total_forms );
+											?>)
+										</span>
+									</span>
+								</label>
+							<?php endif; ?>
 							<div class="aqm-ghl-form-checkboxes">
 								<?php if ( ! empty( $forms ) ) : ?>
 									<?php foreach ( $forms as $form ) : ?>
-										<?php $is_checked = in_array( (int) $form->id, isset( $settings['form_ids'] ) ? (array) $settings['form_ids'] : array(), true ); ?>
+										<?php $is_checked = in_array( (int) $form->id, $selected_ids, true ); ?>
 										<label class="aqm-ghl-form-checkbox-item">
 											<input
 												type="checkbox"
@@ -278,6 +302,35 @@ class AQM_GHL_Admin {
 								<?php endif; ?>
 							</div>
 							<p class="description"><?php esc_html_e( 'Tick each form whose submissions you want sent to GoHighLevel. Forms you don\'t tick are ignored.', 'aqm-ghl' ); ?></p>
+							<?php if ( ! empty( $forms ) ) : ?>
+								<script>
+								(function(){
+									var master = document.getElementById('aqm-ghl-select-all-forms');
+									if ( ! master ) { return; }
+									var boxes  = document.querySelectorAll('.aqm-ghl-form-checkbox');
+									if ( ! boxes.length ) { return; }
+									function syncMaster(){
+										var checked = 0;
+										boxes.forEach(function(b){ if (b.checked) checked++; });
+										master.checked       = ( checked === boxes.length );
+										master.indeterminate = ( checked > 0 && checked < boxes.length );
+									}
+									master.addEventListener('change', function(){
+										boxes.forEach(function(b){
+											if ( b.checked !== master.checked ) {
+												b.checked = master.checked;
+												// Trigger the existing change handler so the per-form mapping
+												// blocks add/remove correctly.
+												b.dispatchEvent(new Event('change', { bubbles: true }));
+											}
+										});
+										master.indeterminate = false;
+									});
+									boxes.forEach(function(b){ b.addEventListener('change', syncMaster); });
+									syncMaster();
+								})();
+								</script>
+							<?php endif; ?>
 						</td>
 					</tr>
 				</table>
