@@ -337,28 +337,32 @@ class AQM_GHL_Admin {
 					</tr>
 				</table>
 
-				<h2 style="margin-top: 2em;"><?php esc_html_e( 'Field mapping', 'aqm-ghl' ); ?></h2>
-				<p class="description" style="margin-bottom: 1em;">
-					<?php esc_html_e( 'Tell the plugin which Formidable field goes into which GoHighLevel contact field. Custom fields are auto-detected.', 'aqm-ghl' ); ?>
-				</p>
-				<?php if ( empty( $settings['form_ids'] ) ) : ?>
-					<p style="padding: 14px; background: #f6f7f7; border-left: 3px solid #c3c4c7; color: #50575e;">
-						<em><?php esc_html_e( 'Pick at least one form above to start mapping fields.', 'aqm-ghl' ); ?></em>
+				<details style="margin-top: 2em; border: 1px solid #c3c4c7; background:#fff; padding: 8px 16px 0;">
+					<summary style="cursor:pointer; padding: 8px 0; font-weight: 600; font-size: 1.1em; color: #1d2327;">
+						<?php esc_html_e( 'Field mapping — auto-detected, click to expand if you need to adjust', 'aqm-ghl' ); ?>
+					</summary>
+					<p class="description" style="margin: 1em 0;">
+						<?php esc_html_e( 'First Name / Last Name / Email / Phone are auto-mapped from Formidable field labels. Open this only if a form needs manual mapping or you want to wire custom fields to GoHighLevel.', 'aqm-ghl' ); ?>
 					</p>
-				<?php else : ?>
-					<p>
-						<button type="button" class="button button-secondary" id="aqm-ghl-fetch-ghl-fields"><?php esc_html_e( 'Refresh GHL custom fields', 'aqm-ghl' ); ?></button>
-						<button type="button" class="button button-secondary" id="aqm-ghl-provision-fields"><?php esc_html_e( 'Create UTM / GCLID fields in GHL', 'aqm-ghl' ); ?></button>
-						<span id="aqm-ghl-fetch-result" class="aqm-ghl-fetch-result" style="display:none;"></span>
-						<span id="aqm-ghl-provision-result" class="notice inline" style="display:none; margin-left: 10px;"></span>
-					</p>
-					<p class="description" style="margin-top: 0.25em;">
-						<?php esc_html_e( 'Click "Refresh" if you added or renamed fields in GHL. "Create UTM / GCLID fields" makes new GHL custom fields for tracking attribution.', 'aqm-ghl' ); ?>
-					</p>
-				<?php endif; ?>
-				<div id="aqm-ghl-form-mapping-containers">
-					<!-- Per-form mapping containers injected by JS -->
-				</div>
+					<?php if ( empty( $settings['form_ids'] ) ) : ?>
+						<p style="padding: 14px; background: #f6f7f7; border-left: 3px solid #c3c4c7; color: #50575e;">
+							<em><?php esc_html_e( 'Pick at least one form above to start mapping fields.', 'aqm-ghl' ); ?></em>
+						</p>
+					<?php else : ?>
+						<p>
+							<button type="button" class="button button-secondary" id="aqm-ghl-fetch-ghl-fields"><?php esc_html_e( 'Refresh GHL custom fields', 'aqm-ghl' ); ?></button>
+							<button type="button" class="button button-secondary" id="aqm-ghl-provision-fields"><?php esc_html_e( 'Create UTM / GCLID fields in GHL', 'aqm-ghl' ); ?></button>
+							<span id="aqm-ghl-fetch-result" class="aqm-ghl-fetch-result" style="display:none;"></span>
+							<span id="aqm-ghl-provision-result" class="notice inline" style="display:none; margin-left: 10px;"></span>
+						</p>
+						<p class="description" style="margin-top: 0.25em;">
+							<?php esc_html_e( 'Click "Refresh" if you added or renamed fields in GHL. "Create UTM / GCLID fields" makes new GHL custom fields for tracking attribution.', 'aqm-ghl' ); ?>
+						</p>
+					<?php endif; ?>
+					<div id="aqm-ghl-form-mapping-containers">
+						<!-- Per-form mapping containers injected by JS -->
+					</div>
+				</details>
 
 				<details style="margin-top: 2em; border: 1px solid #c3c4c7; background:#fff; padding: 8px 16px 0;">
 					<summary style="cursor:pointer; padding: 8px 0; font-weight: 600; font-size: 1.1em; color: #1d2327;">
