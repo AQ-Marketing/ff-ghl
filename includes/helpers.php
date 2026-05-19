@@ -60,6 +60,21 @@ if ( ! function_exists( 'aqm_ghl_get_active_auth' ) ) {
 		// Legacy PIT path.
 		$token       = isset( $settings['private_token'] ) ? (string) $settings['private_token'] : '';
 		$location_id = isset( $settings['location_id'] )   ? (string) $settings['location_id']   : '';
+
+		// Fall back to first multi-location entry if top-level keys are blank
+		// (post-migration sites may have empty top-level scalars).
+		if ( ( '' === $token || '' === $location_id ) && ! empty( $settings['locations'] ) && is_array( $settings['locations'] ) ) {
+			$first = reset( $settings['locations'] );
+			if ( is_array( $first ) ) {
+				if ( '' === $token && ! empty( $first['private_token'] ) ) {
+					$token = (string) $first['private_token'];
+				}
+				if ( '' === $location_id && ! empty( $first['location_id'] ) ) {
+					$location_id = (string) $first['location_id'];
+				}
+			}
+		}
+
 		if ( '' === $token || '' === $location_id ) {
 			return new \WP_Error( 'pit_not_configured', 'Plugin is in PIT mode but no Private Integration Token or Location ID is set.' );
 		}
