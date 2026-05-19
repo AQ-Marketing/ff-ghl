@@ -358,7 +358,12 @@ class AQM_GHL_Admin {
 					<!-- Per-form mapping containers injected by JS -->
 				</div>
 
-				<?php $this->render_workflows_section( $settings, $forms ); ?>
+				<details style="margin-top: 2em; border: 1px solid #c3c4c7; background:#fff; padding: 8px 16px 0;">
+					<summary style="cursor:pointer; padding: 8px 0; font-weight: 600; font-size: 1.1em; color: #1d2327;">
+						<?php esc_html_e( 'GHL Workflows (Per-Form) — advanced, click to expand', 'aqm-ghl' ); ?>
+					</summary>
+					<?php $this->render_workflows_section( $settings, $forms ); ?>
+				</details>
 
 				<?php $this->render_opportunities_section( $settings, $forms ); ?>
 
@@ -688,8 +693,7 @@ class AQM_GHL_Admin {
 			$form_index[ (int) $form->id ] = $form;
 		}
 		?>
-		<h2><?php esc_html_e( 'GHL Workflows (Per-Form)', 'aqm-ghl' ); ?></h2>
-		<p class="description" style="margin-bottom: 1em;">
+		<p class="description" style="margin: 1em 0;">
 			<?php esc_html_e( 'Optional. When enabled per form, the plugin will add the newly-created GHL contact to one or more workflows you select below — in addition to creating the contact. No URL paste needed; uses the same Private Integration Token you\'ve already configured.', 'aqm-ghl' ); ?>
 		</p>
 		<p class="description" style="margin-bottom: 1em; padding: 8px 12px; background:#e7f5ff; border-left:3px solid #2271b1;">
