@@ -289,6 +289,13 @@ class AQM_GHL_Handler {
 			)
 		);
 
+		// Post any long-text / textarea field values as a Note on the contact so
+		// freeform content (e.g. project details) isn't lost. Best-effort — never
+		// blocks the contact/opportunity flow.
+		if ( '' !== $contact_id ) {
+			$this->maybe_post_longtext_note( $contact_id, $entry, $form_id, $bearer, $settings );
+		}
+
 		/**
 		 * Fires after a contact has been successfully created/upserted in GHL.
 		 *
@@ -320,6 +327,81 @@ class AQM_GHL_Handler {
 				)
 			);
 		}
+	}
+
+	/**
+	 * Post long-text / textarea field values from the entry as a Note on the GHL
+	 * contact, so freeform content (e.g. a "project details" textarea) is captured
+	 * even when no matching GHL custom field exists. Best-effort: failures are
+	 * logged and never affect the contact/opportunity result.
+	 *
+	 * @param string $contact_id GHL contact ID.
+	 * @param object $entry      Formidable entry (with ->metas).
+	 * @param int    $form_id    Formidable form ID.
+	 * @param string $token      Resolved bearer token.
+	 * @param array  $settings   Plugin settings.
+	 */
+	private function maybe_post_longtext_note( $contact_id, $entry, $form_id, $token, $settings ) {
+		if ( '' === (string) $contact_id || '' === (string) $token ) {
+			return;
+		}
+		if ( ! class_exists( 'FrmField' ) || empty( $entry->metas ) || ! is_array( $entry->metas ) ) {
+			return;
+		}
+
+		$fields = FrmField::getAll( array( 'fi.form_id' => absint( $form_id ) ) );
+		if ( empty( $fields ) || ! is_array( $fields ) ) {
+			return;
+		}
+
+		$lines = array();
+		foreach ( $fields as $f ) {
+			$type = isset( $f->type ) ? strtolower( (string) $f->type ) : '';
+			if ( 'textarea' !== $type && 'rte' !== $type ) {
+				continue;
+			}
+			$fid = isset( $f->id ) ? (int) $f->id : 0;
+			if ( ! $fid || ! isset( $entry->metas[ $fid ] ) ) {
+				continue;
+			}
+			$val = $entry->metas[ $fid ];
+			if ( is_array( $val ) ) {
+				$val = implode( ', ', array_filter( array_map( 'strval', $val ) ) );
+			}
+			$val = trim( (string) $val );
+			if ( '' === $val ) {
+				continue;
+			}
+			$label   = ( isset( $f->name ) && '' !== (string) $f->name ) ? (string) $f->name : __( 'Details', 'aqm-ghl' );
+			$lines[] = $label . ":\n" . $val;
+		}
+
+		if ( empty( $lines ) ) {
+			return;
+		}
+
+		$body    = implode( "\n\n", $lines );
+		$user_id = isset( $settings['oauth_user_id'] ) ? (string) $settings['oauth_user_id'] : '';
+
+		$result = aqm_ghl_create_note( $contact_id, $body, $token, $user_id );
+
+		if ( is_wp_error( $result ) ) {
+			aqm_ghl_log(
+				'Note creation failed (transport error).',
+				array( 'contact_id' => $contact_id, 'error' => $result->get_error_message() )
+			);
+			return;
+		}
+
+		$note_code = isset( $result['status'] ) ? (int) $result['status'] : 0;
+		aqm_ghl_log(
+			( $note_code >= 200 && $note_code < 300 ) ? 'Note created on contact.' : 'Note creation returned non-2xx.',
+			array(
+				'contact_id' => $contact_id,
+				'status'     => $note_code,
+				'body'       => isset( $result['body'] ) ? mb_substr( (string) $result['body'], 0, 300 ) : '',
+			)
+		);
 	}
 
 	/**

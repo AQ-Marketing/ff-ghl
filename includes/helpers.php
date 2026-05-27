@@ -598,6 +598,52 @@ if ( ! function_exists( 'aqm_ghl_send_contact_payload' ) ) {
 	}
 }
 
+if ( ! function_exists( 'aqm_ghl_create_note' ) ) {
+	/**
+	 * Create a Note on a GHL contact. Best-effort — callers should not block the
+	 * submission flow on the result.
+	 *
+	 * Endpoint: POST https://services.leadconnectorhq.com/contacts/{id}/notes
+	 * Scope:    contacts.write
+	 *
+	 * @param string $contact_id GHL contact ID.
+	 * @param string $body       Note text.
+	 * @param string $token      Bearer token (PIT or OAuth access token).
+	 * @param string $user_id    Optional GHL user ID (some sub-accounts require it).
+	 *
+	 * @return array|\WP_Error array{status:int, body:string} on transport success.
+	 */
+	function aqm_ghl_create_note( $contact_id, $body, $token, $user_id = '' ) {
+		$payload = array( 'body' => (string) $body );
+		if ( '' !== (string) $user_id ) {
+			$payload['userId'] = (string) $user_id;
+		}
+
+		$response = wp_remote_post(
+			sprintf( 'https://services.leadconnectorhq.com/contacts/%s/notes', rawurlencode( (string) $contact_id ) ),
+			array(
+				'headers' => array(
+					'Authorization' => 'Bearer ' . $token,
+					'Version'       => '2021-07-28',
+					'Accept'        => 'application/json',
+					'Content-Type'  => 'application/json',
+				),
+				'timeout' => 15,
+				'body'    => wp_json_encode( $payload ),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		return array(
+			'status' => (int) wp_remote_retrieve_response_code( $response ),
+			'body'   => (string) wp_remote_retrieve_body( $response ),
+		);
+	}
+}
+
 if ( ! function_exists( 'aqm_ghl_store_last_test_result' ) ) {
 	/**
 	 * Store the last test result for display in admin.
