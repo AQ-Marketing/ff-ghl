@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AQM GHL Formidable Connector
  * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts. Supports two auth modes: legacy Private Integration Token (per sub-account) or OAuth via the AQM Marketplace App (per-install Connect button, tokens auto-refresh forever).
- * Version:     2.3.5
+ * Version:     2.3.6
  * Author: AQMarketing
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'AQM_GHL_CONNECTOR_VERSION', '2.3.5' );
+define( 'AQM_GHL_CONNECTOR_VERSION', '2.3.6' );
 define( 'AQM_GHL_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AQM_GHL_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 define( 'AQM_GHL_OPTION_KEY', 'aqm_ghl_connector_settings' );
@@ -26,7 +26,9 @@ define( 'AQM_GHL_OAUTH_SCOPES',        'contacts.readonly contacts.write workflo
 define( 'AQM_GHL_OAUTH_CALLBACK_ACTION', 'aqm_oauth_callback' ); // No 'ghl' in name per GHL whitelabel rule.
 
 // DIAGNOSTIC: capture fatal + memory usage at each WP boot phase on settings page.
-if ( isset( $_GET['page'] ) && 'aqm-ghl-connector' === $_GET['page'] && defined( 'WP_CONTENT_DIR' ) ) {
+// Gated behind WP_DEBUG so it never writes a log file (or responds to the page
+// query param) on production sites.
+if ( defined( 'WP_DEBUG' ) && WP_DEBUG && isset( $_GET['page'] ) && 'aqm-ghl-connector' === $_GET['page'] && defined( 'WP_CONTENT_DIR' ) ) {
 	if ( ! function_exists( 'aqm_ghl_diag_log' ) ) {
 		function aqm_ghl_diag_log( $msg ) {
 			$path = WP_CONTENT_DIR . '/aqm-ghl-diag.log';
@@ -63,8 +65,11 @@ if ( isset( $_GET['page'] ) && 'aqm-ghl-connector' === $_GET['page'] && defined(
  * forever). Loading it via `get_option` would OOM before any plugin code could
  * run. This runs before any helper file is even loaded — it queries the raw
  * option size with $wpdb (no unserialize) and resets the bloated array fields
- * if the option is over 1 MB. Triggered automatically on the settings page,
- * or manually with ?aqm_ghl_emergency_reset=1.
+ * if the option is over 1 MB. The size-based reset fires automatically when the
+ * option exceeds 1 MB. A manual ?aqm_ghl_emergency_reset trigger is also
+ * supported, but now requires an authenticated admin request with a valid
+ * 'aqm_ghl_emergency_reset' nonce — previously it was unauthenticated, which let
+ * anyone wipe the plugin configuration (including OAuth tokens) on any site.
  */
 if ( is_admin() && function_exists( 'add_action' ) ) {
 	add_action( 'plugins_loaded', function () {
@@ -80,7 +85,18 @@ if ( is_admin() && function_exists( 'add_action' ) ) {
 			)
 		);
 
-		if ( $size <= 1048576 && empty( $_GET['aqm_ghl_emergency_reset'] ) ) {
+		// The manual ?aqm_ghl_emergency_reset trigger must be an authenticated admin
+		// request with a valid nonce. plugins_loaded can run before pluggable.php on
+		// some stacks, so guard the auth calls with function_exists — if they aren't
+		// available yet the manual trigger is simply ignored (the size-based auto-heal
+		// below still protects against a genuinely bloated option).
+		$manual_reset = false;
+		if ( ! empty( $_GET['aqm_ghl_emergency_reset'] ) && function_exists( 'wp_verify_nonce' ) && function_exists( 'current_user_can' ) ) {
+			$nonce_ok     = isset( $_GET['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'aqm_ghl_emergency_reset' );
+			$manual_reset = $nonce_ok && current_user_can( 'manage_options' );
+		}
+
+		if ( $size <= 1048576 && ! $manual_reset ) {
 			return;
 		}
 

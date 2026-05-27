@@ -399,6 +399,7 @@ if ( ! function_exists( 'aqm_ghl_get_formidable_form_fields' ) ) {
 
 		return $prepared;
 	}
+}
 
 if ( ! function_exists( 'aqm_ghl_send_contact_payload' ) ) {
 	/**
@@ -508,7 +509,6 @@ if ( ! function_exists( 'aqm_ghl_get_last_submission_result' ) ) {
 
 		return wp_parse_args( is_array( $saved ) ? $saved : array(), $defaults );
 	}
-}
 }
 
 if ( ! function_exists( 'aqm_ghl_sanitize_custom_fields' ) ) {
@@ -648,17 +648,23 @@ if ( ! function_exists( 'aqm_ghl_get_cached_ghl_custom_fields' ) ) {
 	 * @return array
 	 */
 	function aqm_ghl_get_cached_ghl_custom_fields() {
-		$settings = aqm_ghl_get_settings();
-		if ( empty( $settings['location_id'] ) || empty( $settings['private_token'] ) ) {
+		// Resolve through the auth router so this works in OAuth mode too. Reading the
+		// legacy PIT scalars directly returned empty on OAuth-only sites, which left
+		// the field-mapping UI and the test contact's custom fields blank.
+		$auth = aqm_ghl_get_active_auth();
+		if ( is_wp_error( $auth ) ) {
 			return array();
 		}
-		$cache_key = 'aqm_ghl_cf_' . md5( $settings['location_id'] );
+		$location_id = $auth['location_id'];
+		$token       = $auth['token'];
+
+		$cache_key = 'aqm_ghl_cf_' . md5( $location_id );
 		$cached    = get_transient( $cache_key );
 		if ( is_array( $cached ) ) {
 			return $cached;
 		}
 		// Auto-fetch from API when cache is empty and credentials exist.
-		$fields = aqm_ghl_fetch_ghl_custom_fields( $settings['location_id'], $settings['private_token'], false );
+		$fields = aqm_ghl_fetch_ghl_custom_fields( $location_id, $token, false );
 		return is_array( $fields ) ? $fields : array();
 	}
 }

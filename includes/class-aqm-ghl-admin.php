@@ -406,6 +406,56 @@ class AQM_GHL_Admin {
 					</summary>
 					<div style="padding: 12px 18px;">
 						<p><?php esc_html_e( 'Send a mock "John Doe" contact to your GoHighLevel sub-account to verify the connection works.', 'aqm-ghl' ); ?></p>
+						<?php
+						// Show which sub-account this test will actually hit, so it's obvious the
+						// site is wired to the right GHL location before sending. Derived without a
+						// network call — mirrors aqm_ghl_get_active_auth()'s resolution order.
+						$test_mode   = function_exists( 'aqm_ghl_get_auth_mode' ) ? aqm_ghl_get_auth_mode() : 'pit';
+						$test_loc_id = '';
+						$test_loc_nm = '';
+						$test_ready  = false;
+						if ( 'oauth' === $test_mode ) {
+							$test_loc_id = isset( $settings['oauth_location_id'] )   ? (string) $settings['oauth_location_id']   : '';
+							$test_loc_nm = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
+							$test_ready  = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected() && '' !== $test_loc_id;
+						} else {
+							$test_loc_id = isset( $settings['location_id'] ) ? (string) $settings['location_id'] : '';
+							if ( '' === $test_loc_id && ! empty( $settings['locations'][0]['location_id'] ) ) {
+								$test_loc_id = (string) $settings['locations'][0]['location_id'];
+							}
+							if ( ! empty( $settings['locations'][0]['name'] ) ) {
+								$test_loc_nm = (string) $settings['locations'][0]['name'];
+							}
+							$test_ready = ( '' !== $test_loc_id );
+						}
+						?>
+						<?php if ( $test_ready ) : ?>
+							<div style="margin: 0 0 12px; padding: 10px 14px; background: #edfaef; border-left: 4px solid #00a32a; font-size: 13px; color: #1d2327;">
+								<?php
+								if ( '' !== $test_loc_nm ) {
+									printf(
+										/* translators: 1: sub-account display name, 2: sub-account ID */
+										esc_html__( 'This site is connected to: %1$s %2$s', 'aqm-ghl' ),
+										'<strong>' . esc_html( $test_loc_nm ) . '</strong>',
+										'<code style="font-size: 11px;">' . esc_html( $test_loc_id ) . '</code>'
+									);
+								} else {
+									printf(
+										/* translators: %s: sub-account ID */
+										esc_html__( 'This site is connected to sub-account %s', 'aqm-ghl' ),
+										'<code style="font-size: 11px;">' . esc_html( $test_loc_id ) . '</code>'
+									);
+								}
+								?>
+								<br>
+								<span style="color: #50575e;"><?php esc_html_e( 'The test contact below will be sent here — make sure it\'s the right sub-account.', 'aqm-ghl' ); ?></span>
+							</div>
+						<?php else : ?>
+							<div style="margin: 0 0 12px; padding: 10px 14px; background: #fcf0f1; border-left: 4px solid #d63638; font-size: 13px; color: #1d2327;">
+								<strong><?php esc_html_e( 'Not connected to GoHighLevel.', 'aqm-ghl' ); ?></strong>
+								<?php esc_html_e( 'Connect in the Authentication section above before testing — the test would fail.', 'aqm-ghl' ); ?>
+							</div>
+						<?php endif; ?>
 						<p>
 							<button type="button" class="button button-secondary" id="aqm-ghl-test-connection"><?php esc_html_e( 'Send Test Contact', 'aqm-ghl' ); ?></button>
 						</p>
@@ -855,13 +905,12 @@ class AQM_GHL_Admin {
 			wp_send_json_error( array( 'message' => __( 'Unauthorized', 'aqm-ghl' ) ), 403 );
 		}
 
-		$settings    = aqm_ghl_get_settings();
-		$location_id = isset( $settings['location_id'] ) ? (string) $settings['location_id'] : '';
-		$token       = isset( $settings['private_token'] ) ? (string) $settings['private_token'] : '';
-
-		if ( '' === $location_id || '' === $token ) {
-			wp_send_json_error( array( 'message' => __( 'Save your GHL Location ID and Private Integration Token first.', 'aqm-ghl' ) ), 400 );
+		$auth = aqm_ghl_get_active_auth();
+		if ( is_wp_error( $auth ) ) {
+			wp_send_json_error( array( 'message' => __( 'Connect to GoHighLevel first.', 'aqm-ghl' ) . ' ' . $auth->get_error_message() ), 400 );
 		}
+		$location_id = $auth['location_id'];
+		$token       = $auth['token'];
 
 		$result = aqm_ghl_fetch_workflows( $location_id, $token, true );
 
@@ -1179,14 +1228,22 @@ class AQM_GHL_Admin {
 
 		$settings = aqm_ghl_get_settings();
 
-		if ( empty( $settings['location_id'] ) || empty( $settings['private_token'] ) ) {
+		// Resolve credentials through the auth router so this works in both OAuth
+		// and legacy PIT modes. The PIT scalars in $settings are empty on
+		// OAuth-connected sites, so reading them directly always failed here.
+		$auth = aqm_ghl_get_active_auth();
+
+		if ( is_wp_error( $auth ) ) {
 			wp_send_json_error(
 				array(
-					'message' => __( 'Add Location ID and Private Integration Token, then save settings before testing.', 'aqm-ghl' ),
+					'message' => __( 'Connect to GoHighLevel before testing.', 'aqm-ghl' ) . ' ' . $auth->get_error_message(),
 				),
 				400
 			);
 		}
+
+		$settings['location_id']   = $auth['location_id'];
+		$settings['private_token'] = $auth['token'];
 
 		// First, ensure custom fields are provisioned
 		$provisioner = new AQM_GHL_Custom_Field_Provisioner();
@@ -1546,14 +1603,19 @@ class AQM_GHL_Admin {
 
 		$settings = aqm_ghl_get_settings();
 
-		if ( empty( $settings['location_id'] ) || empty( $settings['private_token'] ) ) {
+		$auth = aqm_ghl_get_active_auth();
+
+		if ( is_wp_error( $auth ) ) {
 			wp_send_json_error(
 				array(
-					'message' => __( 'Location ID and Private Integration Token must be configured first.', 'aqm-ghl' ),
+					'message' => __( 'Connect to GoHighLevel before provisioning custom fields.', 'aqm-ghl' ) . ' ' . $auth->get_error_message(),
 				),
 				400
 			);
 		}
+
+		$settings['location_id']   = $auth['location_id'];
+		$settings['private_token'] = $auth['token'];
 
 		$provisioner = new AQM_GHL_Custom_Field_Provisioner();
 
@@ -1628,14 +1690,19 @@ class AQM_GHL_Admin {
 
 		$settings = aqm_ghl_get_settings();
 
-		if ( empty( $settings['location_id'] ) || empty( $settings['private_token'] ) ) {
+		$auth = aqm_ghl_get_active_auth();
+
+		if ( is_wp_error( $auth ) ) {
 			wp_send_json_error(
 				array(
-					'message' => __( 'Save your GHL Location ID and Private Integration Token before fetching custom fields.', 'aqm-ghl' ),
+					'message' => __( 'Connect to GoHighLevel before fetching custom fields.', 'aqm-ghl' ) . ' ' . $auth->get_error_message(),
 				),
 				400
 			);
 		}
+
+		$settings['location_id']   = $auth['location_id'];
+		$settings['private_token'] = $auth['token'];
 
 		$fields = aqm_ghl_fetch_ghl_custom_fields( $settings['location_id'], $settings['private_token'], true );
 
