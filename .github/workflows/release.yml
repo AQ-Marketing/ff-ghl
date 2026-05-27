@@ -79,7 +79,9 @@ jobs:
         run: |
           set -e
           TAG="${GITHUB_REF#refs/tags/}"
-          PUBLIC_REPO="JustCasey76/aqm-ghl-connector-releases"
+          # Must match the repo the plugin updater reads (AQM_GHL_Updater in
+          # aqm-ghl-connector.php). The repo was migrated JustCasey76 -> AQ-Marketing.
+          PUBLIC_REPO="AQ-Marketing/aqm-ghl-connector-releases"
 
           if [ -z "$GH_TOKEN" ]; then
             echo "ERROR: RELEASES_REPO_TOKEN secret is not set."
