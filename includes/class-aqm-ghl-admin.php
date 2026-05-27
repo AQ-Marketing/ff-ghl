@@ -766,16 +766,24 @@ class AQM_GHL_Admin {
 		// mapping yet. The manual mapping UI was removed, so submissions resolve
 		// contact fields automatically; existing (non-empty) mappings are kept.
 		foreach ( $form_ids as $fid ) {
+			if ( ! function_exists( 'aqm_ghl_autodetect_mapping_for_form' ) ) {
+				break;
+			}
+			$detected = aqm_ghl_autodetect_mapping_for_form( $fid );
+			if ( empty( $detected ) ) {
+				continue;
+			}
+			// Merge: fill any missing keys (incl. address1/city/state/postal_code)
+			// without overwriting values already set, so existing forms pick up the
+			// address mapping on their next save.
 			$current = isset( $sanitized['mapping'][ $fid ] ) && is_array( $sanitized['mapping'][ $fid ] ) ? $sanitized['mapping'][ $fid ] : array();
-			$has_any = ! empty( $current['email'] ) || ! empty( $current['phone'] ) || ! empty( $current['first_name'] ) || ! empty( $current['last_name'] );
-			if ( ! $has_any && function_exists( 'aqm_ghl_autodetect_mapping_for_form' ) ) {
-				$detected = aqm_ghl_autodetect_mapping_for_form( $fid );
-				if ( ! empty( $detected ) ) {
-					$sanitized['mapping'][ $fid ] = wp_parse_args(
-						$detected,
-						array( 'email' => '', 'phone' => '', 'first_name' => '', 'last_name' => '' )
-					);
+			foreach ( $detected as $key => $detected_fid ) {
+				if ( empty( $current[ $key ] ) && ! empty( $detected_fid ) ) {
+					$current[ $key ] = $detected_fid;
 				}
+			}
+			if ( ! empty( $current ) ) {
+				$sanitized['mapping'][ $fid ] = $current;
 			}
 		}
 

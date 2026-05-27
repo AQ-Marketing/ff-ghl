@@ -127,10 +127,20 @@ class AQM_GHL_Handler {
 		$first_name = $this->resolve_frm_get_stored_value( $this->get_meta_value( $metas, isset( $map['first_name'] ) ? $map['first_name'] : 0 ) );
 		$last_name  = $this->resolve_frm_get_stored_value( $this->get_meta_value( $metas, isset( $map['last_name'] ) ? $map['last_name'] : 0 ) );
 
+		// Standard GHL address fields (shown under the contact's General Info).
+		$address1    = $this->resolve_frm_get_stored_value( $this->get_meta_value( $metas, isset( $map['address1'] ) ? $map['address1'] : 0 ) );
+		$city        = $this->resolve_frm_get_stored_value( $this->get_meta_value( $metas, isset( $map['city'] ) ? $map['city'] : 0 ) );
+		$state       = $this->resolve_frm_get_stored_value( $this->get_meta_value( $metas, isset( $map['state'] ) ? $map['state'] : 0 ) );
+		$postal_code = $this->resolve_frm_get_stored_value( $this->get_meta_value( $metas, isset( $map['postal_code'] ) ? $map['postal_code'] : 0 ) );
+
 		// Defense-in-depth: resolve_frm_get_stored_value can return raw URL-query data.
 		$email      = is_array( $email )      ? sanitize_email( (string) reset( $email ) )         : sanitize_email( (string) $email );
 		$first_name = is_array( $first_name ) ? sanitize_text_field( (string) reset( $first_name ) ) : sanitize_text_field( (string) $first_name );
 		$last_name  = is_array( $last_name )  ? sanitize_text_field( (string) reset( $last_name ) )  : sanitize_text_field( (string) $last_name );
+		$address1    = is_array( $address1 )    ? sanitize_text_field( (string) reset( $address1 ) )    : sanitize_text_field( (string) $address1 );
+		$city        = is_array( $city )        ? sanitize_text_field( (string) reset( $city ) )        : sanitize_text_field( (string) $city );
+		$state       = is_array( $state )       ? sanitize_text_field( (string) reset( $state ) )       : sanitize_text_field( (string) $state );
+		$postal_code = is_array( $postal_code ) ? sanitize_text_field( (string) reset( $postal_code ) ) : sanitize_text_field( (string) $postal_code );
 
 		$phone = aqm_ghl_normalize_phone( $raw_phone );
 
@@ -167,6 +177,10 @@ class AQM_GHL_Handler {
 			'phone'      => $phone,
 			'firstName'  => $first_name,
 			'lastName'   => $last_name,
+			'address1'   => $address1,
+			'city'       => $city,
+			'state'      => $state,
+			'postalCode' => $postal_code,
 		);
 
 		if ( ! empty( $settings['tags'] ) ) {
@@ -359,9 +373,11 @@ class AQM_GHL_Handler {
 		// custom field.
 		$handled = array();
 		$map     = isset( $settings['mapping'][ $form_id ] ) && is_array( $settings['mapping'][ $form_id ] ) ? $settings['mapping'][ $form_id ] : array();
-		foreach ( array( 'email', 'phone', 'first_name', 'last_name' ) as $k ) {
-			if ( ! empty( $map[ $k ] ) ) {
-				$handled[ (int) $map[ $k ] ] = true;
+		foreach ( $map as $mapped_fid ) {
+			// Every field mapped to a contact field (name/email/phone/address) is
+			// already delivered — keep it out of the note.
+			if ( ! empty( $mapped_fid ) ) {
+				$handled[ (int) $mapped_fid ] = true;
 			}
 		}
 		$cf = isset( $settings['custom_fields'][ $form_id ] ) && is_array( $settings['custom_fields'][ $form_id ] ) ? $settings['custom_fields'][ $form_id ] : array();

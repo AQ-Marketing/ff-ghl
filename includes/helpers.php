@@ -448,11 +448,17 @@ if ( ! function_exists( 'aqm_ghl_autodetect_mapping_for_form' ) ) {
 		}
 
 		// 2) Label heuristics for anything not found by type (priority order).
+		// email/phone/name are matched before the address fields so a field like
+		// "Email Address" claims the email slot before "address" can grab it.
 		$label_rules = array(
-			'email'      => array( '/\bemail\b/', '/\be mail\b/' ),
-			'phone'      => array( '/\bphone\b/', '/\bmobile\b/', '/\bcell\b/', '/\btel\b/' ),
-			'first_name' => array( '/\bfirst name\b/', '/\bfirst\b/', '/\bgiven name\b/', '/\bfname\b/' ),
-			'last_name'  => array( '/\blast name\b/', '/\blast\b/', '/\bsurname\b/', '/\bfamily name\b/', '/\blname\b/' ),
+			'email'       => array( '/\bemail\b/', '/\be mail\b/' ),
+			'phone'       => array( '/\bphone\b/', '/\bmobile\b/', '/\bcell\b/', '/\btel\b/' ),
+			'first_name'  => array( '/\bfirst name\b/', '/\bfirst\b/', '/\bgiven name\b/', '/\bfname\b/' ),
+			'last_name'   => array( '/\blast name\b/', '/\blast\b/', '/\bsurname\b/', '/\bfamily name\b/', '/\blname\b/' ),
+			'address1'    => array( '/\bstreet address\b/', '/\baddress line 1\b/', '/\bmailing address\b/', '/\bstreet\b/', '/\baddress\b/' ),
+			'city'        => array( '/\bcity\b/', '/\btown\b/', '/\bsuburb\b/' ),
+			'state'       => array( '/\bstate\b/', '/\bprovince\b/', '/\bregion\b/' ),
+			'postal_code' => array( '/\bzip code\b/', '/\bzip\b/', '/\bpostal code\b/', '/\bpostcode\b/', '/\bpostal\b/' ),
 		);
 		foreach ( $label_rules as $key => $patterns ) {
 			if ( ! empty( $map[ $key ] ) ) {
