@@ -1066,7 +1066,23 @@ class AQM_GHL_Admin {
 		$body = wp_remote_retrieve_body( $response );
 		$body = is_string( $body ) ? $body : wp_json_encode( $body );
 
-		if ( $code < 200 || $code >= 300 ) {
+		// A "duplicate contact" 400 still proves the connection works: auth
+		// succeeded, the sub-account is valid, and GHL matched a contact the test
+		// already created (the test reuses a fixed phone, and this sub-account
+		// blocks duplicates). Treat it as a successful connection test, not a
+		// failure.
+		$is_duplicate = false;
+		if ( 400 === (int) $code ) {
+			$decoded = json_decode( $body, true );
+			if ( is_array( $decoded ) ) {
+				$dup_msg = isset( $decoded['message'] ) ? strtolower( (string) $decoded['message'] ) : '';
+				if ( false !== strpos( $dup_msg, 'duplicat' ) || ! empty( $decoded['meta']['contactId'] ) ) {
+					$is_duplicate = true;
+				}
+			}
+		}
+
+		if ( ! $is_duplicate && ( $code < 200 || $code >= 300 ) ) {
 			aqm_ghl_store_last_test_result(
 				array(
 					'success'  => false,
@@ -1098,18 +1114,22 @@ class AQM_GHL_Admin {
 			);
 		}
 
+		$base_message = $is_duplicate
+			? __( 'Connection works! A matching test contact already exists in this sub-account (duplicate contacts are blocked here), so no new one was created — but the request reached GoHighLevel and authenticated correctly.', 'aqm-ghl' )
+			: __( 'Test contact sent successfully. Check GoHighLevel contacts.', 'aqm-ghl' );
+
 		aqm_ghl_store_last_test_result(
 			array(
 				'success'  => true,
 				'status'   => $code,
 				'payload'  => $payload,
 				'response' => $body,
-				'message'  => __( 'Test contact sent successfully. Check GoHighLevel contacts.', 'aqm-ghl' ),
+				'message'  => $base_message,
 			)
 		);
 
 		// Include field mapping info in response for debugging
-		$message = __( 'Test contact sent successfully. Check GoHighLevel contacts.', 'aqm-ghl' );
+		$message = $base_message;
 		
 		// Add provisioning status to message
 		if ( ! empty( $field_mapping ) && count( $field_mapping ) >= 6 ) {
