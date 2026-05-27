@@ -289,11 +289,12 @@ class AQM_GHL_Handler {
 			)
 		);
 
-		// Post any long-text / textarea field values as a Note on the contact so
-		// freeform content (e.g. project details) isn't lost. Best-effort — never
-		// blocks the contact/opportunity flow.
+		// Post a Note with any submitted fields not already sent as a contact
+		// field or GHL custom field (e.g. a project-details textarea, or a
+		// "Color: Blue" field with no matching custom field) so nothing is lost.
+		// Best-effort — never blocks the contact/opportunity flow.
 		if ( '' !== $contact_id ) {
-			$this->maybe_post_longtext_note( $contact_id, $entry, $form_id, $bearer, $settings );
+			$this->maybe_post_unmapped_fields_note( $contact_id, $entry, $form_id, $bearer, $settings );
 		}
 
 		/**
@@ -330,10 +331,12 @@ class AQM_GHL_Handler {
 	}
 
 	/**
-	 * Post long-text / textarea field values from the entry as a Note on the GHL
-	 * contact, so freeform content (e.g. a "project details" textarea) is captured
-	 * even when no matching GHL custom field exists. Best-effort: failures are
-	 * logged and never affect the contact/opportunity result.
+	 * Post a Note on the GHL contact containing every submitted field that isn't
+	 * already delivered elsewhere — i.e. not a core contact field (name/email/
+	 * phone) and not mapped to a GHL custom field. Each is written as
+	 * "Label: value" so a "project details" textarea and any field without a
+	 * matching GHL custom field (e.g. "Color: Blue") are still captured.
+	 * Best-effort: failures are logged and never affect the contact/opportunity.
 	 *
 	 * @param string $contact_id GHL contact ID.
 	 * @param object $entry      Formidable entry (with ->metas).
@@ -341,7 +344,7 @@ class AQM_GHL_Handler {
 	 * @param string $token      Resolved bearer token.
 	 * @param array  $settings   Plugin settings.
 	 */
-	private function maybe_post_longtext_note( $contact_id, $entry, $form_id, $token, $settings ) {
+	private function maybe_post_unmapped_fields_note( $contact_id, $entry, $form_id, $token, $settings ) {
 		if ( '' === (string) $contact_id || '' === (string) $token ) {
 			return;
 		}
@@ -349,38 +352,61 @@ class AQM_GHL_Handler {
 			return;
 		}
 
-		$fields = FrmField::getAll( array( 'fi.form_id' => absint( $form_id ) ) );
+		$form_id = absint( $form_id );
+
+		// Fields already delivered to GHL elsewhere — exclude them from the note:
+		// core contact fields (name/email/phone) and any field mapped to a GHL
+		// custom field.
+		$handled = array();
+		$map     = isset( $settings['mapping'][ $form_id ] ) && is_array( $settings['mapping'][ $form_id ] ) ? $settings['mapping'][ $form_id ] : array();
+		foreach ( array( 'email', 'phone', 'first_name', 'last_name' ) as $k ) {
+			if ( ! empty( $map[ $k ] ) ) {
+				$handled[ (int) $map[ $k ] ] = true;
+			}
+		}
+		$cf = isset( $settings['custom_fields'][ $form_id ] ) && is_array( $settings['custom_fields'][ $form_id ] ) ? $settings['custom_fields'][ $form_id ] : array();
+		foreach ( $cf as $row ) {
+			if ( ! empty( $row['form_field_id'] ) ) {
+				$handled[ (int) $row['form_field_id'] ] = true;
+			}
+		}
+
+		$fields = FrmField::getAll( array( 'fi.form_id' => $form_id ) );
 		if ( empty( $fields ) || ! is_array( $fields ) ) {
 			return;
 		}
 
+		// Field types that carry no user-entered value worth noting (UTM/GCLID
+		// live in hidden fields and are sent as custom fields already).
+		$skip_types = array( 'divider', 'html', 'break', 'captcha', 'end_divider', 'hidden', 'submit', 'summary' );
+
 		$lines = array();
 		foreach ( $fields as $f ) {
-			$type = isset( $f->type ) ? strtolower( (string) $f->type ) : '';
-			if ( 'textarea' !== $type && 'rte' !== $type ) {
+			$fid = isset( $f->id ) ? (int) $f->id : 0;
+			if ( ! $fid || isset( $handled[ $fid ] ) || ! isset( $entry->metas[ $fid ] ) ) {
 				continue;
 			}
-			$fid = isset( $f->id ) ? (int) $f->id : 0;
-			if ( ! $fid || ! isset( $entry->metas[ $fid ] ) ) {
+			$type = isset( $f->type ) ? strtolower( (string) $f->type ) : '';
+			if ( in_array( $type, $skip_types, true ) ) {
 				continue;
 			}
 			$val = $entry->metas[ $fid ];
 			if ( is_array( $val ) ) {
-				$val = implode( ', ', array_filter( array_map( 'strval', $val ) ) );
+				$val = implode( ', ', array_filter( array_map( 'strval', $val ), 'strlen' ) );
 			}
 			$val = trim( (string) $val );
 			if ( '' === $val ) {
 				continue;
 			}
-			$label   = ( isset( $f->name ) && '' !== (string) $f->name ) ? (string) $f->name : __( 'Details', 'aqm-ghl' );
-			$lines[] = $label . ":\n" . $val;
+			$label   = ( isset( $f->name ) && '' !== (string) $f->name ) ? (string) $f->name : __( 'Field', 'aqm-ghl' );
+			$lines[] = $label . ': ' . $val;
 		}
 
 		if ( empty( $lines ) ) {
 			return;
 		}
 
-		$body    = implode( "\n\n", $lines );
+		$body    = implode( "\n", $lines );
 		$user_id = isset( $settings['oauth_user_id'] ) ? (string) $settings['oauth_user_id'] : '';
 
 		$result = aqm_ghl_create_note( $contact_id, $body, $token, $user_id );
