@@ -401,6 +401,179 @@ if ( ! function_exists( 'aqm_ghl_get_formidable_form_fields' ) ) {
 	}
 }
 
+if ( ! function_exists( 'aqm_ghl_autodetect_mapping_for_form' ) ) {
+	/**
+	 * Auto-detect the Formidable field IDs for email / phone / first name /
+	 * last name on a form, by field type first then label heuristics. Used at
+	 * settings-save time so submissions resolve contact fields with no manual
+	 * mapping. Returns only the keys it could confidently match.
+	 *
+	 * @param int $form_id Formidable form ID.
+	 * @return array Map of email|phone|first_name|last_name => Formidable field ID (int).
+	 */
+	function aqm_ghl_autodetect_mapping_for_form( $form_id ) {
+		$form_id = absint( $form_id );
+		if ( ! $form_id || ! class_exists( 'FrmField' ) ) {
+			return array();
+		}
+
+		$fields = FrmField::getAll(
+			array(
+				'fi.form_id'  => $form_id,
+				'fi.type not' => array( 'divider', 'html', 'break', 'captcha', 'end_divider', 'hidden' ),
+			)
+		);
+		if ( empty( $fields ) || ! is_array( $fields ) ) {
+			return array();
+		}
+
+		$norm = function ( $s ) {
+			return strtolower( trim( preg_replace( '/[^a-z0-9]+/i', ' ', (string) $s ) ) );
+		};
+
+		$map = array();
+
+		// 1) Type-based detection (most reliable).
+		foreach ( $fields as $f ) {
+			$fid  = isset( $f->id ) ? (int) $f->id : 0;
+			$type = isset( $f->type ) ? strtolower( (string) $f->type ) : '';
+			if ( ! $fid ) {
+				continue;
+			}
+			if ( 'email' === $type && empty( $map['email'] ) ) {
+				$map['email'] = $fid;
+			} elseif ( 'phone' === $type && empty( $map['phone'] ) ) {
+				$map['phone'] = $fid;
+			}
+		}
+
+		// 2) Label heuristics for anything not found by type (priority order).
+		$label_rules = array(
+			'email'      => array( '/\bemail\b/', '/\be mail\b/' ),
+			'phone'      => array( '/\bphone\b/', '/\bmobile\b/', '/\bcell\b/', '/\btel\b/' ),
+			'first_name' => array( '/\bfirst name\b/', '/\bfirst\b/', '/\bgiven name\b/', '/\bfname\b/' ),
+			'last_name'  => array( '/\blast name\b/', '/\blast\b/', '/\bsurname\b/', '/\bfamily name\b/', '/\blname\b/' ),
+		);
+		foreach ( $label_rules as $key => $patterns ) {
+			if ( ! empty( $map[ $key ] ) ) {
+				continue;
+			}
+			foreach ( $patterns as $pattern ) {
+				foreach ( $fields as $f ) {
+					$fid = isset( $f->id ) ? (int) $f->id : 0;
+					if ( ! $fid || in_array( $fid, $map, true ) ) {
+						continue;
+					}
+					if ( preg_match( $pattern, $norm( isset( $f->name ) ? $f->name : '' ) ) ) {
+						$map[ $key ] = $fid;
+						continue 3;
+					}
+				}
+			}
+		}
+
+		// 3) Fallback: a single "name" / "full name" field maps to first name
+		// (GHL accepts a full name in firstName) when no first/last were found.
+		if ( empty( $map['first_name'] ) && empty( $map['last_name'] ) ) {
+			foreach ( $fields as $f ) {
+				$fid = isset( $f->id ) ? (int) $f->id : 0;
+				if ( ! $fid || in_array( $fid, $map, true ) ) {
+					continue;
+				}
+				$type  = isset( $f->type ) ? strtolower( (string) $f->type ) : '';
+				$label = $norm( isset( $f->name ) ? $f->name : '' );
+				if ( 'name' === $type || preg_match( '/\b(full )?name\b/', $label ) ) {
+					$map['first_name'] = $fid;
+					break;
+				}
+			}
+		}
+
+		return $map;
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_autodetect_custom_fields_for_form' ) ) {
+	/**
+	 * Auto-map a form's fields to GHL custom fields by matching labels, so custom
+	 * fields flow through with no manual mapping UI. Skips core contact fields and
+	 * UTM/GCLID fields (those are injected automatically at submission time).
+	 *
+	 * @param int $form_id Formidable form ID.
+	 * @return array List of array{ghl_field_id:string, form_field_id:int}.
+	 */
+	function aqm_ghl_autodetect_custom_fields_for_form( $form_id ) {
+		$form_id = absint( $form_id );
+		if ( ! $form_id || ! class_exists( 'FrmField' ) ) {
+			return array();
+		}
+
+		$ghl_fields = aqm_ghl_get_cached_ghl_custom_fields();
+		if ( empty( $ghl_fields ) || ! is_array( $ghl_fields ) ) {
+			return array();
+		}
+
+		$frm_fields = FrmField::getAll(
+			array(
+				'fi.form_id'  => $form_id,
+				'fi.type not' => array( 'divider', 'html', 'break', 'captcha', 'end_divider' ),
+			)
+		);
+		if ( empty( $frm_fields ) || ! is_array( $frm_fields ) ) {
+			return array();
+		}
+
+		$norm = function ( $s ) {
+			return preg_replace( '/[^a-z0-9]+/', '', strtolower( (string) $s ) );
+		};
+
+		// Core + UTM/GCLID fields are handled elsewhere — never auto-map them here.
+		$skip = array( 'email', 'phone', 'phonenumber', 'firstname', 'lastname', 'name', 'fullname', 'gclid', 'utmsource', 'utmmedium', 'utmcampaign', 'utmterm', 'utmcontent' );
+
+		// Index Formidable fields by normalized label (first occurrence wins).
+		$by_label = array();
+		foreach ( $frm_fields as $f ) {
+			$fid = isset( $f->id ) ? (int) $f->id : 0;
+			$key = $norm( isset( $f->name ) ? $f->name : '' );
+			if ( $fid && '' !== $key && ! isset( $by_label[ $key ] ) ) {
+				$by_label[ $key ] = $fid;
+			}
+		}
+
+		$out  = array();
+		$used = array();
+		foreach ( $ghl_fields as $cf ) {
+			$cf_id = isset( $cf['id'] ) ? (string) $cf['id'] : '';
+			if ( '' === $cf_id ) {
+				continue;
+			}
+			// Candidate keys: the GHL field name (minus an "AQM -" prefix) and the
+			// fieldKey suffix (e.g. contact.company -> company).
+			$name_key = $norm( str_replace( 'AQM -', '', isset( $cf['name'] ) ? $cf['name'] : '' ) );
+			$fk_key   = '';
+			if ( ! empty( $cf['fieldKey'] ) ) {
+				$parts  = explode( '.', (string) $cf['fieldKey'] );
+				$fk_key = $norm( end( $parts ) );
+			}
+			if ( in_array( $name_key, $skip, true ) || in_array( $fk_key, $skip, true ) ) {
+				continue;
+			}
+			$match = 0;
+			if ( $name_key && isset( $by_label[ $name_key ] ) ) {
+				$match = $by_label[ $name_key ];
+			} elseif ( $fk_key && isset( $by_label[ $fk_key ] ) ) {
+				$match = $by_label[ $fk_key ];
+			}
+			if ( $match && empty( $used[ $match ] ) ) {
+				$out[]          = array( 'ghl_field_id' => $cf_id, 'form_field_id' => $match );
+				$used[ $match ] = true;
+			}
+		}
+
+		return $out;
+	}
+}
+
 if ( ! function_exists( 'aqm_ghl_send_contact_payload' ) ) {
 	/**
 	 * Send a contact payload to GoHighLevel.
@@ -666,545 +839,6 @@ if ( ! function_exists( 'aqm_ghl_get_cached_ghl_custom_fields' ) ) {
 		// Auto-fetch from API when cache is empty and credentials exist.
 		$fields = aqm_ghl_fetch_ghl_custom_fields( $location_id, $token, false );
 		return is_array( $fields ) ? $fields : array();
-	}
-}
-
-if ( ! function_exists( 'aqm_ghl_sync_ghl_fields_to_forms' ) ) {
-	/**
-	 * Create hidden fields in selected Formidable forms for each GHL custom field
-	 * and set the Default Value to Formidable URL shortcode (e.g. [frm_get param="utm_source"]).
-	 * Also auto-maps the new fields in plugin settings.
-	 *
-	 * @return array Summary with created/updated counts.
-	 */
-	function aqm_ghl_sync_ghl_fields_to_forms() {
-		if ( ! class_exists( 'FrmField' ) ) {
-			return array( 'created' => 0, 'updated' => 0, 'mapped' => 0 );
-		}
-
-		$settings   = aqm_ghl_get_settings();
-		$form_ids   = ! empty( $settings['form_ids'] ) ? (array) $settings['form_ids'] : array();
-		$ghl_fields = aqm_ghl_get_cached_ghl_custom_fields();
-
-		if ( empty( $form_ids ) || empty( $ghl_fields ) ) {
-			return array( 'created' => 0, 'updated' => 0, 'mapped' => 0 );
-		}
-
-		// Core field names handled by the standard mapping — never auto-create these.
-		$core_names = array( 'email', 'phone', 'phonenumber', 'firstname', 'lastname', 'name', 'fullname' );
-
-		$created_count  = 0;
-		$updated_count  = 0;
-		$mapped_count   = 0;
-		$settings_dirty = false;
-
-		if ( ! isset( $settings['custom_fields'] ) || ! is_array( $settings['custom_fields'] ) ) {
-			$settings['custom_fields'] = array();
-		}
-
-		foreach ( $form_ids as $form_id ) {
-			$form_id = absint( $form_id );
-			if ( ! $form_id ) {
-				continue;
-			}
-
-			// Get all existing Formidable fields for this form.
-			$existing = FrmField::getAll( array( 'fi.form_id' => $form_id ) );
-
-			// Index by normalised default-value and normalised label.
-			$by_default = array();
-			$by_label   = array();
-			$max_order  = 0;
-
-			foreach ( $existing as $f ) {
-				// default_value can be a string or array (e.g. some field types); never pass arrays to trim().
-				$raw_dv = isset( $f->default_value ) ? $f->default_value : '';
-				if ( is_array( $raw_dv ) ) {
-					$raw_dv = implode( ' ', array_filter( array_map( 'strval', $raw_dv ) ) );
-				} elseif ( is_scalar( $raw_dv ) ) {
-					$raw_dv = (string) $raw_dv;
-				} else {
-					$raw_dv = '';
-				}
-				$dv = '' !== $raw_dv ? strtolower( trim( $raw_dv ) ) : '';
-				if ( $dv ) {
-					$by_default[ $dv ] = $f;
-				}
-				$raw_label = isset( $f->name ) ? $f->name : '';
-				if ( is_array( $raw_label ) ) {
-					$raw_label = implode( ' ', array_filter( array_map( 'strval', $raw_label ) ) );
-				} elseif ( is_scalar( $raw_label ) ) {
-					$raw_label = (string) $raw_label;
-				} else {
-					$raw_label = '';
-				}
-				$label = '' !== $raw_label ? strtolower( trim( $raw_label ) ) : '';
-				if ( $label ) {
-					$by_label[ $label ] = $f;
-				}
-				if ( isset( $f->field_order ) && (int) $f->field_order > $max_order ) {
-					$max_order = (int) $f->field_order;
-				}
-			}
-
-			// Ensure mapping array for this form.
-			if ( ! isset( $settings['custom_fields'][ $form_id ] ) ) {
-				$settings['custom_fields'][ $form_id ] = array();
-			}
-
-			// Build set of GHL IDs already mapped for this form.
-			$mapped_ghl = array();
-			foreach ( $settings['custom_fields'][ $form_id ] as $m ) {
-				if ( ! empty( $m['ghl_field_id'] ) ) {
-					$mapped_ghl[ $m['ghl_field_id'] ] = true;
-				}
-			}
-
-			foreach ( $ghl_fields as $ghl ) {
-				// Skip core fields.
-				$norm = strtolower( str_replace( array( '_', '-', ' ' ), '', $ghl['name'] ) );
-				if ( in_array( $norm, $core_names, true ) ) {
-					continue;
-				}
-				if ( empty( $ghl['fieldKey'] ) ) {
-					continue;
-				}
-
-				$field_key_raw = (string) $ghl['fieldKey']; // e.g. contact.utm_source
-				$field_key_parts = explode( '.', $field_key_raw );
-				$query_param_key = sanitize_key( end( $field_key_parts ) ); // e.g. utm_source
-				if ( '' === $query_param_key ) {
-					continue;
-				}
-
-				$default_val_legacy = '{{ ' . $field_key_raw . ' }}';
-				$default_val        = '[frm_get param="' . $query_param_key . '"]';
-				$default_key = strtolower( $default_val );
-				$legacy_key  = strtolower( $default_val_legacy );
-				$label_key   = strtolower( trim( $ghl['name'] ) );
-				$frm_field_id = null;
-
-				// 1. Field with the new shortcode default exists.
-				if ( isset( $by_default[ $default_key ] ) ) {
-					$frm_field_id = (int) $by_default[ $default_key ]->id;
-				}
-				// 1b. Field with old merge-token default exists - migrate it.
-				elseif ( isset( $by_default[ $legacy_key ] ) ) {
-					$frm_field_id = (int) $by_default[ $legacy_key ]->id;
-					FrmField::update( $frm_field_id, array( 'default_value' => $default_val ) );
-					$updated_count++;
-				}
-				// 2. Field with matching label exists — update its default value.
-				elseif ( isset( $by_label[ $label_key ] ) ) {
-					$frm_field_id = (int) $by_label[ $label_key ]->id;
-					FrmField::update( $frm_field_id, array( 'default_value' => $default_val ) );
-					$updated_count++;
-				}
-				// 3. Create a new hidden field.
-				else {
-					$max_order++;
-					$new_id = FrmField::create(
-						array(
-							'form_id'       => $form_id,
-							'name'          => $ghl['name'],
-							'type'          => 'hidden',
-							'default_value' => $default_val,
-							'field_order'   => $max_order,
-						)
-					);
-					if ( $new_id ) {
-						$frm_field_id = (int) $new_id;
-						$created_count++;
-					}
-				}
-
-				// Ensure the mapping exists.
-				if ( $frm_field_id && ! isset( $mapped_ghl[ $ghl['id'] ] ) ) {
-					$settings['custom_fields'][ $form_id ][] = array(
-						'ghl_field_id'  => $ghl['id'],
-						'form_field_id' => (string) $frm_field_id,
-					);
-					$mapped_ghl[ $ghl['id'] ] = true;
-					$mapped_count++;
-					$settings_dirty = true;
-				}
-			}
-		}
-
-		if ( $settings_dirty ) {
-			update_option( AQM_GHL_OPTION_KEY, $settings );
-		}
-
-		return array(
-			'created' => $created_count,
-			'updated' => $updated_count,
-			'mapped'  => $mapped_count,
-		);
-	}
-}
-
-if ( ! function_exists( 'aqm_ghl_export_settings_data' ) ) {
-	/**
-	 * Get all settings as stored in the database (including private_token) for export.
-	 *
-	 * @return array Export payload with version and settings.
-	 */
-	function aqm_ghl_export_settings_data() {
-		$raw      = get_option( AQM_GHL_OPTION_KEY, array() );
-		$settings = is_array( $raw ) ? $raw : array();
-
-		return array(
-			'version'  => 1,
-			'exported' => current_time( 'mysql' ),
-			'plugin'   => 'aqm-ghl-connector',
-			'settings' => $settings,
-		);
-	}
-}
-
-if ( ! function_exists( 'aqm_ghl_import_settings_data' ) ) {
-	/**
-	 * Validate and import settings from an exported JSON payload.
-	 * Retains ALL settings including location_id, private_token, locations, form_ids, etc.
-	 *
-	 * @param array $data Decoded export payload (must have 'settings' key).
-	 * @return true|\WP_Error True on success, WP_Error on failure.
-	 */
-	function aqm_ghl_import_settings_data( $data ) {
-		if ( ! is_array( $data ) || ! isset( $data['settings'] ) || ! is_array( $data['settings'] ) ) {
-			return new \WP_Error( 'invalid_format', __( 'Invalid export file: missing or invalid settings data.', 'aqm-ghl' ) );
-		}
-
-		$settings = $data['settings'];
-		$existing = get_option( AQM_GHL_OPTION_KEY, array() );
-		$existing = is_array( $existing ) ? $existing : array();
-
-		// Sanitize known string keys. Tokens use strip-tags-only; other strings get full sanitize.
-		$token_keys  = array( 'private_token', 'github_token' );
-		$string_keys = array( 'location_id', 'tags' );
-		foreach ( $token_keys as $key ) {
-			if ( array_key_exists( $key, $settings ) ) {
-				$existing[ $key ] = is_string( $settings[ $key ] ) ? trim( wp_strip_all_tags( $settings[ $key ] ) ) : '';
-			}
-		}
-		foreach ( $string_keys as $key ) {
-			if ( array_key_exists( $key, $settings ) ) {
-				$existing[ $key ] = is_string( $settings[ $key ] ) ? sanitize_text_field( $settings[ $key ] ) : '';
-			}
-		}
-		if ( array_key_exists( 'enable_logging', $settings ) ) {
-			$existing['enable_logging'] = ! empty( $settings['enable_logging'] ) ? 1 : 0;
-		}
-		if ( array_key_exists( 'form_ids', $settings ) && is_array( $settings['form_ids'] ) ) {
-			$existing['form_ids'] = array_map( 'absint', $settings['form_ids'] );
-		}
-		if ( array_key_exists( 'form_id', $settings ) ) {
-			$existing['form_id'] = absint( $settings['form_id'] );
-		}
-		if ( array_key_exists( 'mapping', $settings ) && is_array( $settings['mapping'] ) ) {
-			$clean_mapping = array();
-			$mapping_count = 0;
-			foreach ( $settings['mapping'] as $fid => $map ) {
-				if ( $mapping_count++ > 200 || ! is_array( $map ) ) {
-					continue;
-				}
-				$fid_int = absint( $fid );
-				if ( ! $fid_int ) {
-					continue;
-				}
-				$clean_mapping[ $fid_int ] = array();
-				foreach ( $map as $key => $value ) {
-					$clean_key = sanitize_key( (string) $key );
-					if ( '' === $clean_key ) {
-						continue;
-					}
-					$clean_mapping[ $fid_int ][ $clean_key ] = is_scalar( $value ) ? absint( $value ) : 0;
-				}
-			}
-			$existing['mapping'] = $clean_mapping;
-		}
-		if ( array_key_exists( 'custom_fields', $settings ) && is_array( $settings['custom_fields'] ) ) {
-			$clean_custom = array();
-			$cf_count = 0;
-			foreach ( $settings['custom_fields'] as $fid => $rows ) {
-				if ( $cf_count++ > 200 || ! is_array( $rows ) ) {
-					continue;
-				}
-				$fid_int = absint( $fid );
-				if ( ! $fid_int ) {
-					continue;
-				}
-				$clean_custom[ $fid_int ] = array();
-				foreach ( $rows as $row ) {
-					if ( ! is_array( $row ) ) {
-						continue;
-					}
-					$clean_custom[ $fid_int ][] = array(
-						'form_field_id' => isset( $row['form_field_id'] ) ? absint( $row['form_field_id'] ) : 0,
-						'ghl_field_id'  => isset( $row['ghl_field_id'] ) ? sanitize_text_field( (string) $row['ghl_field_id'] ) : '',
-					);
-				}
-			}
-			$existing['custom_fields'] = $clean_custom;
-		}
-		if ( array_key_exists( 'locations', $settings ) && is_array( $settings['locations'] ) ) {
-			$clean_locations = array();
-			$loc_count = 0;
-			foreach ( $settings['locations'] as $loc ) {
-				if ( $loc_count++ > 50 || ! is_array( $loc ) ) {
-					continue;
-				}
-				$clean_locations[] = array(
-					'location_id'   => isset( $loc['location_id'] ) ? sanitize_text_field( (string) $loc['location_id'] ) : '',
-					'private_token' => isset( $loc['private_token'] ) ? trim( wp_strip_all_tags( (string) $loc['private_token'] ) ) : '',
-					'label'         => isset( $loc['label'] ) ? sanitize_text_field( (string) $loc['label'] ) : '',
-				);
-			}
-			$existing['locations'] = $clean_locations;
-		}
-
-		update_option( AQM_GHL_OPTION_KEY, $existing, false );
-
-		return true;
-	}
-}
-
-if ( ! function_exists( 'aqm_ghl_get_workflow_binding_for_form' ) ) {
-	/**
-	 * Retrieve the GHL Workflow binding for a given WordPress form.
-	 *
-	 * Stored at $settings['workflow_form_binding'][ $wp_form_id ] with shape:
-	 *   - enabled:      bool
-	 *   - workflow_ids: array of GHL workflow IDs (multi-select)
-	 *
-	 * @param int $wp_form_id Formidable form ID.
-	 *
-	 * @return array Empty array when nothing is configured.
-	 */
-	function aqm_ghl_get_workflow_binding_for_form( $wp_form_id ) {
-		$wp_form_id = absint( $wp_form_id );
-		if ( ! $wp_form_id ) {
-			return array();
-		}
-
-		$settings = aqm_ghl_get_settings();
-		if ( empty( $settings['workflow_form_binding'] ) || ! is_array( $settings['workflow_form_binding'] ) ) {
-			return array();
-		}
-
-		$binding = isset( $settings['workflow_form_binding'][ $wp_form_id ] ) ? $settings['workflow_form_binding'][ $wp_form_id ] : null;
-		if ( ! is_array( $binding ) ) {
-			return array();
-		}
-
-		return wp_parse_args(
-			$binding,
-			array(
-				'enabled'      => false,
-				'workflow_ids' => array(),
-			)
-		);
-	}
-}
-
-if ( ! function_exists( 'aqm_ghl_fetch_workflows' ) ) {
-	/**
-	 * Fetch the list of workflows for a location from the GHL v2 API.
-	 *
-	 * Endpoint: GET https://services.leadconnectorhq.com/workflows/?locationId=...
-	 * Required PIT scope: workflows.readonly
-	 *
-	 * Result is cached for 1 hour in a transient keyed by md5(location_id).
-	 * Pass $force=true to bypass cache (e.g. user-clicked "Refresh").
-	 *
-	 * @param string $location_id GHL location ID.
-	 * @param string $token       Private Integration Token.
-	 * @param bool   $force       Skip cache and hit the API.
-	 *
-	 * @return array|\WP_Error Array of { id, name, status, version } objects, or WP_Error.
-	 */
-	function aqm_ghl_fetch_workflows( $location_id, $token, $force = false ) {
-		$cache_key = 'aqm_ghl_wf_' . md5( (string) $location_id );
-
-		if ( ! $force ) {
-			$cached = get_transient( $cache_key );
-			if ( is_array( $cached ) ) {
-				return $cached;
-			}
-		}
-
-		$url = add_query_arg(
-			array( 'locationId' => $location_id ),
-			'https://services.leadconnectorhq.com/workflows/'
-		);
-
-		$response = wp_remote_get(
-			$url,
-			array(
-				'headers' => array(
-					'Authorization' => 'Bearer ' . $token,
-					'Version'       => '2021-07-28',
-					'Accept'        => 'application/json',
-				),
-				'timeout' => 15,
-			)
-		);
-
-		if ( is_wp_error( $response ) ) {
-			return $response;
-		}
-
-		$code = wp_remote_retrieve_response_code( $response );
-		$body = json_decode( wp_remote_retrieve_body( $response ), true );
-
-		if ( $code < 200 || $code >= 300 ) {
-			$msg = is_array( $body ) && isset( $body['message'] ) ? $body['message'] : wp_remote_retrieve_body( $response );
-			// Surface scope problems with a clear pointer rather than the raw GHL error.
-			if ( 401 === (int) $code || 403 === (int) $code ) {
-				$msg = sprintf(
-					/* translators: %s: GHL error message */
-					__( 'GHL refused the request (HTTP %1$d). Your Private Integration Token may be missing the "workflows.readonly" scope. In GoHighLevel go to Settings → Private Integrations → edit the token → add "View Workflows", then paste the new token in the plugin and save. (Raw: %2$s)', 'aqm-ghl' ),
-					(int) $code,
-					$msg
-				);
-			}
-			return new \WP_Error( 'ghl_workflows_error', $msg );
-		}
-
-		if ( ! is_array( $body ) || ! isset( $body['workflows'] ) || ! is_array( $body['workflows'] ) ) {
-			return new \WP_Error( 'ghl_workflows_invalid', __( 'Unexpected response from GHL workflows endpoint.', 'aqm-ghl' ) );
-		}
-
-		$out = array();
-		foreach ( $body['workflows'] as $wf ) {
-			if ( empty( $wf['id'] ) ) {
-				continue;
-			}
-			$out[] = array(
-				'id'      => sanitize_text_field( (string) $wf['id'] ),
-				'name'    => isset( $wf['name'] ) ? sanitize_text_field( (string) $wf['name'] ) : '',
-				'status'  => isset( $wf['status'] ) ? sanitize_text_field( (string) $wf['status'] ) : '',
-				'version' => isset( $wf['version'] ) ? (int) $wf['version'] : 0,
-			);
-		}
-
-		set_transient( $cache_key, $out, HOUR_IN_SECONDS );
-
-		return $out;
-	}
-}
-
-if ( ! function_exists( 'aqm_ghl_get_cached_workflows' ) ) {
-	/**
-	 * Return cached workflows for the location without forcing an API call.
-	 * Used by admin UI rendering — if cache is cold the user can click
-	 * "Refresh Workflows" to populate it.
-	 *
-	 * @param string $location_id GHL location ID.
-	 *
-	 * @return array
-	 */
-	function aqm_ghl_get_cached_workflows( $location_id ) {
-		if ( empty( $location_id ) ) {
-			return array();
-		}
-		$cached = get_transient( 'aqm_ghl_wf_' . md5( (string) $location_id ) );
-		return is_array( $cached ) ? $cached : array();
-	}
-}
-
-if ( ! function_exists( 'aqm_ghl_add_contact_to_workflow' ) ) {
-	/**
-	 * Add a GHL contact to a workflow.
-	 *
-	 * Endpoint: POST https://services.leadconnectorhq.com/contacts/{contactId}/workflow/{workflowId}
-	 * Required PIT scope: contacts.write
-	 *
-	 * @param string $contact_id   GHL contact ID.
-	 * @param string $workflow_id  GHL workflow ID.
-	 * @param string $token        Private Integration Token.
-	 *
-	 * @return array|\WP_Error array{status:int, body:string} on transport success, WP_Error on transport failure.
-	 */
-	function aqm_ghl_add_contact_to_workflow( $contact_id, $workflow_id, $token ) {
-		$url = sprintf(
-			'https://services.leadconnectorhq.com/contacts/%s/workflow/%s',
-			rawurlencode( (string) $contact_id ),
-			rawurlencode( (string) $workflow_id )
-		);
-
-		$response = wp_remote_post(
-			$url,
-			array(
-				'headers' => array(
-					'Authorization' => 'Bearer ' . $token,
-					'Version'       => '2021-07-28',
-					'Accept'        => 'application/json',
-					'Content-Type'  => 'application/json',
-				),
-				'timeout' => 15,
-				// Endpoint accepts no body, but send an empty JSON object to be safe.
-				'body'    => '{}',
-			)
-		);
-
-		if ( is_wp_error( $response ) ) {
-			return $response;
-		}
-
-		return array(
-			'status' => (int) wp_remote_retrieve_response_code( $response ),
-			'body'   => (string) wp_remote_retrieve_body( $response ),
-		);
-	}
-}
-
-if ( ! function_exists( 'aqm_ghl_sanitize_workflow_form_binding' ) ) {
-	/**
-	 * Sanitize the per-WP-form workflow binding map for storage.
-	 *
-	 * @param array $raw Raw input from the settings form.
-	 *
-	 * @return array Cleaned [ wp_form_id => { enabled, workflow_ids } ] map.
-	 */
-	function aqm_ghl_sanitize_workflow_form_binding( $raw ) {
-		if ( empty( $raw ) || ! is_array( $raw ) ) {
-			return array();
-		}
-
-		$clean = array();
-		$count = 0;
-		foreach ( $raw as $wp_form_id => $binding ) {
-			if ( $count++ > 200 || ! is_array( $binding ) ) {
-				continue;
-			}
-			$wp_form_id = absint( $wp_form_id );
-			if ( ! $wp_form_id ) {
-				continue;
-			}
-
-			$ids = array();
-			if ( isset( $binding['workflow_ids'] ) && is_array( $binding['workflow_ids'] ) ) {
-				$id_count = 0;
-				foreach ( $binding['workflow_ids'] as $wf_id ) {
-					if ( $id_count++ > 50 ) {
-						break;
-					}
-					$wf_id = sanitize_text_field( (string) $wf_id );
-					if ( '' !== $wf_id ) {
-						$ids[] = $wf_id;
-					}
-				}
-				$ids = array_values( array_unique( $ids ) );
-			}
-
-			$clean[ $wp_form_id ] = array(
-				'enabled'      => ! empty( $binding['enabled'] ),
-				'workflow_ids' => $ids,
-			);
-		}
-
-		return $clean;
 	}
 }
 

@@ -251,7 +251,7 @@ class AQM_GHL_Handler {
 
 		$response_body = wp_remote_retrieve_body( $response );
 
-		// Extract contact ID so downstream components (AQM_GHL_Form_Submitter)
+		// Extract contact ID so downstream components (the opportunity pusher)
 		// can act on the newly-created/updated contact. GHL returns either
 		// { contact: { id: "..." } } or, on duplicate-email upsert, the same
 		// shape pointing at the existing contact.
@@ -292,10 +292,10 @@ class AQM_GHL_Handler {
 		/**
 		 * Fires after a contact has been successfully created/upserted in GHL.
 		 *
-		 * AQM_GHL_Form_Submitter listens for this to add the contact to any
-		 * GHL workflows configured for the WP form. Listening on this hook
-		 * (instead of `frm_after_create_entry` directly) guarantees the
-		 * contact exists before we try to attach a workflow to it.
+		 * AQM_GHL_Opportunity_Pusher listens for this to create an opportunity
+		 * for the new contact. Listening on this hook (instead of
+		 * `frm_after_create_entry` directly) guarantees the contact exists
+		 * before downstream components act on it.
 		 *
 		 * @param string $contact_id GHL contact ID.
 		 * @param int    $entry_id   Formidable entry ID.

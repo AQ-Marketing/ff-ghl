@@ -16,14 +16,8 @@ class AQM_GHL_Admin {
 		add_action( 'admin_menu', array( $this, 'register_menu' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
-		add_action( 'wp_ajax_aqm_ghl_get_form_fields', array( $this, 'ajax_get_form_fields' ) );
 		add_action( 'wp_ajax_aqm_ghl_test_connection', array( $this, 'ajax_test_connection' ) );
 		add_action( 'wp_ajax_aqm_ghl_clear_update_cache', array( $this, 'ajax_clear_update_cache' ) );
-		add_action( 'wp_ajax_aqm_ghl_provision_fields', array( $this, 'ajax_provision_fields' ) );
-		add_action( 'wp_ajax_aqm_ghl_fetch_ghl_fields', array( $this, 'ajax_fetch_ghl_fields' ) );
-		add_action( 'wp_ajax_aqm_ghl_fetch_workflows', array( $this, 'ajax_fetch_workflows' ) );
-		add_action( 'admin_post_aqm_ghl_export_settings', array( $this, 'handle_export_settings' ) );
-		add_action( 'admin_post_aqm_ghl_import_settings', array( $this, 'handle_import_settings' ) );
 	}
 
 	/**
@@ -337,40 +331,6 @@ class AQM_GHL_Admin {
 					</tr>
 				</table>
 
-				<details style="margin-top: 2em; border: 1px solid #c3c4c7; background:#fff; padding: 8px 16px 0;">
-					<summary style="cursor:pointer; padding: 8px 0; font-weight: 600; font-size: 1.1em; color: #1d2327;">
-						<?php esc_html_e( 'Field mapping — auto-detected, click to expand if you need to adjust', 'aqm-ghl' ); ?>
-					</summary>
-					<p class="description" style="margin: 1em 0;">
-						<?php esc_html_e( 'First Name / Last Name / Email / Phone are auto-mapped from Formidable field labels. Open this only if a form needs manual mapping or you want to wire custom fields to GoHighLevel.', 'aqm-ghl' ); ?>
-					</p>
-					<?php if ( empty( $settings['form_ids'] ) ) : ?>
-						<p style="padding: 14px; background: #f6f7f7; border-left: 3px solid #c3c4c7; color: #50575e;">
-							<em><?php esc_html_e( 'Pick at least one form above to start mapping fields.', 'aqm-ghl' ); ?></em>
-						</p>
-					<?php else : ?>
-						<p>
-							<button type="button" class="button button-secondary" id="aqm-ghl-fetch-ghl-fields"><?php esc_html_e( 'Refresh GHL custom fields', 'aqm-ghl' ); ?></button>
-							<button type="button" class="button button-secondary" id="aqm-ghl-provision-fields"><?php esc_html_e( 'Create UTM / GCLID fields in GHL', 'aqm-ghl' ); ?></button>
-							<span id="aqm-ghl-fetch-result" class="aqm-ghl-fetch-result" style="display:none;"></span>
-							<span id="aqm-ghl-provision-result" class="notice inline" style="display:none; margin-left: 10px;"></span>
-						</p>
-						<p class="description" style="margin-top: 0.25em;">
-							<?php esc_html_e( 'Click "Refresh" if you added or renamed fields in GHL. "Create UTM / GCLID fields" makes new GHL custom fields for tracking attribution.', 'aqm-ghl' ); ?>
-						</p>
-					<?php endif; ?>
-					<div id="aqm-ghl-form-mapping-containers">
-						<!-- Per-form mapping containers injected by JS -->
-					</div>
-				</details>
-
-				<details style="margin-top: 2em; border: 1px solid #c3c4c7; background:#fff; padding: 8px 16px 0;">
-					<summary style="cursor:pointer; padding: 8px 0; font-weight: 600; font-size: 1.1em; color: #1d2327;">
-						<?php esc_html_e( 'GHL Workflows (Per-Form) — advanced, click to expand', 'aqm-ghl' ); ?>
-					</summary>
-					<?php $this->render_workflows_section( $settings, $forms ); ?>
-				</details>
-
 				<h2 style="margin-top: 2em;"><?php esc_html_e( 'Optional settings', 'aqm-ghl' ); ?></h2>
 				<table class="form-table" role="presentation">
 					<tr>
@@ -479,102 +439,7 @@ class AQM_GHL_Admin {
 					</div>
 				</details>
 
-				<details style="margin: 1em 0; border: 1px solid #dcdcde; background: #fff;">
-					<summary style="cursor: pointer; padding: 10px 14px; background: #f6f7f7; font-weight: 600;">
-						<?php esc_html_e( 'Last test result', 'aqm-ghl' ); ?>
-						<?php if ( ! empty( $last_test['timestamp'] ) ) : ?>
-							<span style="font-weight: normal; color: #646970; font-size: 12px;">— <?php echo esc_html( $last_test['timestamp'] ); ?></span>
-						<?php endif; ?>
-					</summary>
-					<div style="padding: 12px 18px;">
-						<?php if ( ! empty( $last_test['timestamp'] ) ) : ?>
-							<p><strong><?php esc_html_e( 'Status:', 'aqm-ghl' ); ?></strong> <?php echo esc_html( $last_test['status'] ); ?></p>
-							<p><strong><?php esc_html_e( 'Message:', 'aqm-ghl' ); ?></strong> <?php echo esc_html( $last_test['message'] ); ?></p>
-							<?php if ( $last_payload ) : ?>
-								<p><strong><?php esc_html_e( 'Request payload:', 'aqm-ghl' ); ?></strong></p>
-								<pre style="max-height: 240px; overflow: auto;"><?php echo esc_html( $last_payload ); ?></pre>
-							<?php endif; ?>
-							<?php if ( ! empty( $last_test['response'] ) ) : ?>
-								<p><strong><?php esc_html_e( 'Response body:', 'aqm-ghl' ); ?></strong></p>
-								<pre style="max-height: 240px; overflow: auto;"><?php echo esc_html( $last_test['response'] ); ?></pre>
-							<?php endif; ?>
-						<?php else : ?>
-							<p><em><?php esc_html_e( 'No test run yet. Use "Test connection" above.', 'aqm-ghl' ); ?></em></p>
-						<?php endif; ?>
-					</div>
-				</details>
-
-				<details style="margin: 1em 0; border: 1px solid #dcdcde; background: #fff;">
-					<summary style="cursor: pointer; padding: 10px 14px; background: #f6f7f7; font-weight: 600;">
-						<?php esc_html_e( 'Last live form submission', 'aqm-ghl' ); ?>
-						<?php if ( ! empty( $last_submission['timestamp'] ) ) : ?>
-							<span style="font-weight: normal; color: #646970; font-size: 12px;">— <?php echo esc_html( $last_submission['timestamp'] ); ?></span>
-						<?php endif; ?>
-					</summary>
-					<div style="padding: 12px 18px;">
-						<?php if ( ! empty( $last_submission['timestamp'] ) ) : ?>
-							<p><strong><?php esc_html_e( 'Status:', 'aqm-ghl' ); ?></strong> <?php echo esc_html( $last_submission['status'] ); ?></p>
-							<p><strong><?php esc_html_e( 'Message:', 'aqm-ghl' ); ?></strong> <?php echo esc_html( $last_submission['message'] ); ?></p>
-							<?php if ( $last_submission_context ) : ?>
-								<p><strong><?php esc_html_e( 'Context:', 'aqm-ghl' ); ?></strong></p>
-								<pre style="max-height: 240px; overflow: auto;"><?php echo esc_html( $last_submission_context ); ?></pre>
-							<?php endif; ?>
-							<?php if ( $last_submission_payload ) : ?>
-								<p><strong><?php esc_html_e( 'Request payload:', 'aqm-ghl' ); ?></strong></p>
-								<pre style="max-height: 240px; overflow: auto;"><?php echo esc_html( $last_submission_payload ); ?></pre>
-							<?php endif; ?>
-							<?php if ( ! empty( $last_submission['response'] ) ) : ?>
-								<p><strong><?php esc_html_e( 'Response body:', 'aqm-ghl' ); ?></strong></p>
-								<pre style="max-height: 240px; overflow: auto;"><?php echo esc_html( $last_submission['response'] ); ?></pre>
-							<?php endif; ?>
-						<?php else : ?>
-							<p><em><?php esc_html_e( 'No live form submissions recorded yet.', 'aqm-ghl' ); ?></em></p>
-						<?php endif; ?>
-					</div>
-				</details>
 			</form>
-
-			<details style="margin: 1em 0; border: 1px solid #dcdcde; background: #fff;">
-				<summary style="cursor: pointer; padding: 10px 14px; background: #f6f7f7; font-weight: 600;">
-					<?php esc_html_e( 'Backup / restore settings', 'aqm-ghl' ); ?>
-				</summary>
-				<div style="padding: 12px 18px;">
-					<p><?php esc_html_e( 'Export all settings (including credentials) to a JSON file you can save or use to migrate to another WordPress install.', 'aqm-ghl' ); ?></p>
-
-					<table class="form-table" role="presentation">
-						<tr>
-							<th scope="row"><?php esc_html_e( 'Export', 'aqm-ghl' ); ?></th>
-							<td>
-								<a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=aqm_ghl_export_settings' ), 'aqm_ghl_export' ) ); ?>" class="button button-secondary">
-									<?php esc_html_e( 'Download settings (JSON)', 'aqm-ghl' ); ?>
-								</a>
-								<p class="description"><?php esc_html_e( 'Saves a copy of all current settings including credentials. Store the file securely.', 'aqm-ghl' ); ?></p>
-							</td>
-						</tr>
-						<tr>
-							<th scope="row"><?php esc_html_e( 'Import', 'aqm-ghl' ); ?></th>
-							<td>
-								<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" enctype="multipart/form-data" class="aqm-ghl-import-form">
-									<input type="hidden" name="action" value="aqm_ghl_import_settings" />
-									<?php wp_nonce_field( 'aqm_ghl_import', 'aqm_ghl_import_nonce' ); ?>
-									<p>
-										<label for="aqm-ghl-import-file"><?php esc_html_e( 'Upload JSON file:', 'aqm-ghl' ); ?></label>
-										<input type="file" name="aqm_ghl_import_file" id="aqm-ghl-import-file" accept=".json,application/json" />
-									</p>
-									<p class="description"><?php esc_html_e( 'Or paste JSON below (from a previous export).', 'aqm-ghl' ); ?></p>
-									<p>
-										<textarea name="aqm_ghl_import_json" id="aqm-ghl-import-json" class="large-text code" rows="6" placeholder='{"version":1,"plugin":"aqm-ghl-connector","settings":{...}}'></textarea>
-									</p>
-									<p>
-										<button type="submit" class="button button-secondary"><?php esc_html_e( 'Import settings', 'aqm-ghl' ); ?></button>
-									</p>
-								</form>
-								<p class="description"><?php esc_html_e( 'Import replaces all current settings. Use only trusted export files.', 'aqm-ghl' ); ?></p>
-							</td>
-						</tr>
-					</table>
-				</div>
-			</details>
 		</div>
 		<?php
 	}
@@ -711,7 +576,16 @@ class AQM_GHL_Admin {
 				</form>
 			</div>
 
-			<?php if ( 'pit' === $active_mode ) : ?>
+			<?php
+			// Only call out "legacy PIT mode" when a PIT token is actually saved
+			// (a real legacy site). Otherwise the auth detector just defaults to
+			// "pit" with nothing configured, and the "Connect" prompt above is the
+			// correct guidance — claiming PIT "still works" would be misleading.
+			$pit_token = isset( $settings['private_token'] ) && '' !== (string) $settings['private_token']
+				? (string) $settings['private_token']
+				: ( ! empty( $settings['locations'][0]['private_token'] ) ? (string) $settings['locations'][0]['private_token'] : '' );
+			?>
+			<?php if ( 'pit' === $active_mode && '' !== $pit_token ) : ?>
 				<div style="margin: 1em 0; padding: 10px 14px; background: #fffbeb; border-left: 3px solid #d39e00; font-size: 13px;">
 					<strong><?php esc_html_e( 'Currently using legacy Private Integration Token mode.', 'aqm-ghl' ); ?></strong>
 					<?php esc_html_e( 'It still works — but switching to OAuth above is recommended.', 'aqm-ghl' ); ?>
@@ -719,216 +593,6 @@ class AQM_GHL_Admin {
 			<?php endif; ?>
 		<?php endif; ?>
 		<?php
-	}
-
-	/**
-	 * Render the "GHL Workflows" settings section.
-	 *
-	 * For each selected WP form, the user picks one or more GHL workflows
-	 * from a multi-select checkbox list populated via GET /workflows/.
-	 * On submission, the plugin adds the newly-created contact to each
-	 * selected workflow via POST /contacts/{id}/workflow/{wfId}. No URL
-	 * paste required — uses the same PIT the plugin already has configured.
-	 *
-	 * Requires the PIT to have the `workflows.readonly` scope (in addition
-	 * to the existing `contacts.write` etc.) so the dropdown can be populated.
-	 *
-	 * @param array $settings Current plugin settings.
-	 * @param array $forms    Formidable form objects.
-	 */
-	private function render_workflows_section( $settings, $forms ) {
-		$bindings   = isset( $settings['workflow_form_binding'] ) && is_array( $settings['workflow_form_binding'] ) ? $settings['workflow_form_binding'] : array();
-		$selected   = isset( $settings['form_ids'] ) && is_array( $settings['form_ids'] ) ? array_map( 'absint', $settings['form_ids'] ) : array();
-		$opt_key    = AQM_GHL_OPTION_KEY;
-		$location   = isset( $settings['location_id'] ) ? (string) $settings['location_id'] : '';
-		$workflows  = $location ? aqm_ghl_get_cached_workflows( $location ) : array();
-		$form_index = array();
-		foreach ( $forms as $form ) {
-			$form_index[ (int) $form->id ] = $form;
-		}
-		?>
-		<p class="description" style="margin: 1em 0;">
-			<?php esc_html_e( 'Optional. When enabled per form, the plugin will add the newly-created GHL contact to one or more workflows you select below — in addition to creating the contact. No URL paste needed; uses the same Private Integration Token you\'ve already configured.', 'aqm-ghl' ); ?>
-		</p>
-		<p class="description" style="margin-bottom: 1em; padding: 8px 12px; background:#e7f5ff; border-left:3px solid #2271b1;">
-			<strong><?php esc_html_e( 'One-time GHL setup:', 'aqm-ghl' ); ?></strong>
-			<?php esc_html_e( 'Ensure your Private Integration Token has the "View Workflows" (workflows.readonly) scope in addition to the existing scopes. Then click "Refresh Workflows from GHL" below to populate the list.', 'aqm-ghl' ); ?>
-		</p>
-		<p>
-			<button type="button" class="button button-secondary" id="aqm-ghl-fetch-workflows"><?php esc_html_e( 'Refresh Workflows from GHL', 'aqm-ghl' ); ?></button>
-			<span id="aqm-ghl-fetch-workflows-result" class="notice inline" style="display:none; margin-left: 10px;"></span>
-		</p>
-
-		<?php if ( empty( $workflows ) ) : ?>
-			<p><em><?php esc_html_e( 'No workflows loaded yet. Click "Refresh Workflows from GHL" above. (If you get an error, your token likely needs the "View Workflows" scope.)', 'aqm-ghl' ); ?></em></p>
-		<?php endif; ?>
-
-		<?php if ( empty( $selected ) ) : ?>
-			<p><em><?php esc_html_e( 'Select one or more Formidable forms above to configure which GHL workflows to attach.', 'aqm-ghl' ); ?></em></p>
-			<?php return; ?>
-		<?php endif; ?>
-
-		<?php foreach ( $selected as $wp_form_id ) :
-			if ( ! isset( $form_index[ $wp_form_id ] ) ) { continue; }
-			$wp_form    = $form_index[ $wp_form_id ];
-			$binding    = isset( $bindings[ $wp_form_id ] ) ? $bindings[ $wp_form_id ] : array();
-			$enabled    = ! empty( $binding['enabled'] );
-			$picked_ids = isset( $binding['workflow_ids'] ) && is_array( $binding['workflow_ids'] ) ? $binding['workflow_ids'] : array();
-			$base_name  = $opt_key . '[workflow_form_binding][' . (int) $wp_form_id . ']';
-		?>
-			<div class="aqm-ghl-workflow-binding" style="margin: 12px 0; border: 1px solid #c3c4c7; background:#fff; padding: 12px 16px;">
-				<h3 style="margin-top:0;">
-					<?php
-					printf(
-						/* translators: 1: form name, 2: form ID */
-						esc_html__( '%1$s (WP form ID: %2$d)', 'aqm-ghl' ),
-						esc_html( (string) $wp_form->name ),
-						(int) $wp_form_id
-					);
-					?>
-				</h3>
-				<table class="form-table" role="presentation">
-					<tr>
-						<th scope="row"><?php esc_html_e( 'Attach to workflows', 'aqm-ghl' ); ?></th>
-						<td>
-							<label>
-								<input type="checkbox" name="<?php echo esc_attr( $base_name ); ?>[enabled]" value="1" <?php checked( $enabled ); ?> />
-								<?php esc_html_e( 'Add the new contact to the selected workflows on submission.', 'aqm-ghl' ); ?>
-							</label>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><?php esc_html_e( 'Workflows', 'aqm-ghl' ); ?></th>
-						<td>
-							<?php if ( ! empty( $workflows ) ) : ?>
-								<div class="aqm-ghl-workflow-checkboxes" style="max-height: 240px; overflow-y: auto; border: 1px solid #dcdcde; padding: 8px 12px; background: #fdfdfd;">
-									<?php foreach ( $workflows as $wf ) :
-										$wf_id     = isset( $wf['id'] ) ? (string) $wf['id'] : '';
-										$wf_name   = isset( $wf['name'] ) ? (string) $wf['name'] : $wf_id;
-										$wf_status = isset( $wf['status'] ) ? (string) $wf['status'] : '';
-										if ( '' === $wf_id ) { continue; }
-										$is_checked = in_array( $wf_id, $picked_ids, true );
-									?>
-										<label style="display:block; margin: 3px 0;">
-											<input type="checkbox" name="<?php echo esc_attr( $base_name ); ?>[workflow_ids][]" value="<?php echo esc_attr( $wf_id ); ?>" <?php checked( $is_checked ); ?> />
-											<?php echo esc_html( $wf_name ); ?>
-											<?php if ( $wf_status ) : ?>
-												<span class="description" style="color:#646970;">(<?php echo esc_html( $wf_status ); ?>)</span>
-											<?php endif; ?>
-										</label>
-									<?php endforeach; ?>
-								</div>
-								<p class="description"><?php esc_html_e( 'Tick one or more workflows. On submission, the new GHL contact will be added to each one.', 'aqm-ghl' ); ?></p>
-							<?php else : ?>
-								<?php /* Render hidden inputs so existing picks survive saves before a successful refresh. */ ?>
-								<?php foreach ( $picked_ids as $kept_id ) : ?>
-									<input type="hidden" name="<?php echo esc_attr( $base_name ); ?>[workflow_ids][]" value="<?php echo esc_attr( $kept_id ); ?>" />
-								<?php endforeach; ?>
-								<p><em><?php esc_html_e( 'Workflow list is empty — click "Refresh Workflows from GHL" above to load it.', 'aqm-ghl' ); ?></em></p>
-								<?php if ( ! empty( $picked_ids ) ) : ?>
-									<p class="description"><?php
-										/* translators: %d: number of workflow IDs still saved */
-										printf( esc_html__( '(%d workflow ID(s) previously saved are preserved.)', 'aqm-ghl' ), count( $picked_ids ) );
-									?></p>
-								<?php endif; ?>
-							<?php endif; ?>
-						</td>
-					</tr>
-				</table>
-			</div>
-		<?php endforeach; ?>
-		<script>
-		(function(){
-			// The settings page renders this section mid-body, but
-			// aqmGhlSettings is injected by wp_localize_script attached to a
-			// footer-enqueued script handle — so it doesn't exist yet during
-			// the initial HTML parse. Defer to DOMContentLoaded so we run
-			// after the footer scripts execute.
-			function wire() {
-				var btn = document.getElementById('aqm-ghl-fetch-workflows');
-				var out = document.getElementById('aqm-ghl-fetch-workflows-result');
-				if ( ! btn || ! out ) {
-					console.warn('[AQM GHL] Refresh button or output element missing in DOM.');
-					return;
-				}
-				if ( typeof aqmGhlSettings === 'undefined' ) {
-					console.error('[AQM GHL] aqmGhlSettings is not defined when wiring the Refresh button. Admin script may have failed to load.');
-					out.style.display = 'inline';
-					out.className = 'notice notice-error inline';
-					out.textContent = <?php echo wp_json_encode( __( 'Plugin admin script failed to load. Check the browser console.', 'aqm-ghl' ) ); ?>;
-					return;
-				}
-				btn.addEventListener('click', function(){
-					out.style.display = 'inline';
-					out.className = 'notice inline';
-					out.textContent = <?php echo wp_json_encode( __( 'Fetching workflows…', 'aqm-ghl' ) ); ?>;
-					var body = new FormData();
-					body.append( 'action', 'aqm_ghl_fetch_workflows' );
-					body.append( 'nonce', aqmGhlSettings.nonce );
-					fetch( aqmGhlSettings.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body } )
-						.then( function(r){ return r.json(); } )
-						.then( function(json){
-							if ( json && json.success ) {
-								out.className = 'notice notice-success inline';
-								out.textContent = ( json.data && json.data.message ) ? json.data.message : <?php echo wp_json_encode( __( 'Done. Reloading…', 'aqm-ghl' ) ); ?>;
-								setTimeout(function(){ window.location.reload(); }, 600);
-							} else {
-								out.className = 'notice notice-error inline';
-								out.textContent = ( json && json.data && json.data.message ) ? json.data.message : <?php echo wp_json_encode( __( 'Failed to fetch workflows.', 'aqm-ghl' ) ); ?>;
-								console.error('[AQM GHL] fetch workflows failed:', json);
-							}
-						} )
-						.catch(function(e){
-							out.className = 'notice notice-error inline';
-							out.textContent = String(e);
-							console.error('[AQM GHL] fetch error:', e);
-						});
-				});
-			}
-			if ( document.readyState === 'loading' ) {
-				document.addEventListener('DOMContentLoaded', wire);
-			} else {
-				// Already loaded (rare on settings pages, but safe).
-				wire();
-			}
-		})();
-		</script>
-		<?php
-	}
-
-	/**
-	 * AJAX: Refresh workflows from GHL (writes to the 1h transient cache).
-	 */
-	public function ajax_fetch_workflows() {
-		check_ajax_referer( 'aqm_ghl_admin', 'nonce' );
-		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Unauthorized', 'aqm-ghl' ) ), 403 );
-		}
-
-		$auth = aqm_ghl_get_active_auth();
-		if ( is_wp_error( $auth ) ) {
-			wp_send_json_error( array( 'message' => __( 'Connect to GoHighLevel first.', 'aqm-ghl' ) . ' ' . $auth->get_error_message() ), 400 );
-		}
-		$location_id = $auth['location_id'];
-		$token       = $auth['token'];
-
-		$result = aqm_ghl_fetch_workflows( $location_id, $token, true );
-
-		if ( is_wp_error( $result ) ) {
-			wp_send_json_error( array( 'message' => $result->get_error_message() ), 400 );
-		}
-
-		wp_send_json_success(
-			array(
-				'message'   => sprintf(
-					/* translators: %d: count */
-					_n( 'Loaded %d workflow from GHL. Save settings to keep your picks.', 'Loaded %d workflows from GHL. Save settings to keep your picks.', count( $result ), 'aqm-ghl' ),
-					count( $result )
-				),
-				'workflows' => $result,
-				'count'     => count( $result ),
-			)
-		);
 	}
 
 	/**
@@ -1087,14 +751,31 @@ class AQM_GHL_Admin {
 		// Ensure all selected forms have mapping entries (even if empty)
 		foreach ( $form_ids as $fid ) {
 			if ( ! isset( $sanitized['mapping'][ $fid ] ) ) {
-				$sanitized['mapping'][ $fid ] = isset( $existing_mapping[ $fid ] ) 
-					? $existing_mapping[ $fid ] 
+				$sanitized['mapping'][ $fid ] = isset( $existing_mapping[ $fid ] )
+					? $existing_mapping[ $fid ]
 					: array(
 						'email'      => '',
 						'phone'      => '',
 						'first_name' => '',
 						'last_name'  => '',
 					);
+			}
+		}
+
+		// Auto-detect name/email/phone for any selected form that has no usable
+		// mapping yet. The manual mapping UI was removed, so submissions resolve
+		// contact fields automatically; existing (non-empty) mappings are kept.
+		foreach ( $form_ids as $fid ) {
+			$current = isset( $sanitized['mapping'][ $fid ] ) && is_array( $sanitized['mapping'][ $fid ] ) ? $sanitized['mapping'][ $fid ] : array();
+			$has_any = ! empty( $current['email'] ) || ! empty( $current['phone'] ) || ! empty( $current['first_name'] ) || ! empty( $current['last_name'] );
+			if ( ! $has_any && function_exists( 'aqm_ghl_autodetect_mapping_for_form' ) ) {
+				$detected = aqm_ghl_autodetect_mapping_for_form( $fid );
+				if ( ! empty( $detected ) ) {
+					$sanitized['mapping'][ $fid ] = wp_parse_args(
+						$detected,
+						array( 'email' => '', 'phone' => '', 'first_name' => '', 'last_name' => '' )
+					);
+				}
 			}
 		}
 
@@ -1133,16 +814,36 @@ class AQM_GHL_Admin {
 		}
 		$sanitized['custom_fields'] = $sanitized_custom_fields;
 
-		$sanitized['tags'] = isset( $input['tags'] ) ? sanitize_text_field( $input['tags'] ) : '';
+		// Auto-map remaining GHL custom fields to matching form fields in the
+		// background (no manual UI). Existing mappings are kept; newly-matched
+		// GHL fields are appended so custom fields flow through automatically.
+		foreach ( $form_ids as $fid ) {
+			if ( ! function_exists( 'aqm_ghl_autodetect_custom_fields_for_form' ) ) {
+				break;
+			}
+			$detected = aqm_ghl_autodetect_custom_fields_for_form( $fid );
+			if ( empty( $detected ) ) {
+				continue;
+			}
+			$rows     = isset( $sanitized['custom_fields'][ $fid ] ) && is_array( $sanitized['custom_fields'][ $fid ] ) ? $sanitized['custom_fields'][ $fid ] : array();
+			$have_ghl = array();
+			foreach ( $rows as $row ) {
+				if ( ! empty( $row['ghl_field_id'] ) ) {
+					$have_ghl[ $row['ghl_field_id'] ] = true;
+				}
+			}
+			foreach ( $detected as $row ) {
+				if ( empty( $have_ghl[ $row['ghl_field_id'] ] ) ) {
+					$rows[]                           = $row;
+					$have_ghl[ $row['ghl_field_id'] ] = true;
+				}
+			}
+			if ( ! empty( $rows ) ) {
+				$sanitized['custom_fields'][ $fid ] = $rows;
+			}
+		}
 
-		// Per-WP-form binding to one or more GHL workflows, used by
-		// AQM_GHL_Form_Submitter to add the new contact to each selected
-		// workflow via POST /contacts/{id}/workflow/{wfId}. Preserved across
-		// saves for forms not currently selected so removing/re-adding a form
-		// doesn't lose its binding.
-		$existing_bindings = isset( $existing['workflow_form_binding'] ) && is_array( $existing['workflow_form_binding'] ) ? $existing['workflow_form_binding'] : array();
-		$new_bindings      = isset( $input['workflow_form_binding'] ) ? aqm_ghl_sanitize_workflow_form_binding( $input['workflow_form_binding'] ) : array();
-		$sanitized['workflow_form_binding'] = array_replace( $existing_bindings, $new_bindings );
+		$sanitized['tags'] = isset( $input['tags'] ) ? sanitize_text_field( $input['tags'] ) : '';
 
 		// Global "Create opportunity?" toggle — if on, every form submission
 		// also creates an opportunity (auto-picks first pipeline + first stage).
@@ -1190,31 +891,6 @@ class AQM_GHL_Admin {
 		return $to_save;
 	}
 
-
-	/**
-	 * AJAX handler to fetch fields for a form.
-	 */
-	public function ajax_get_form_fields() {
-		check_ajax_referer( 'aqm_ghl_admin', 'nonce' );
-
-		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Unauthorized', 'aqm-ghl' ) ), 403 );
-		}
-
-		$form_id = isset( $_POST['form_id'] ) ? absint( $_POST['form_id'] ) : 0;
-
-		if ( ! $form_id ) {
-			wp_send_json_error( array( 'message' => __( 'Missing form ID.', 'aqm-ghl' ) ), 400 );
-		}
-
-		$fields = aqm_ghl_get_formidable_form_fields( $form_id );
-
-		wp_send_json_success(
-			array(
-				'fields' => $fields,
-			)
-		);
-	}
 
 	/**
 	 * AJAX handler to test the connection by sending a mock contact.
@@ -1591,207 +1267,6 @@ class AQM_GHL_Admin {
 		);
 	}
 
-	/**
-	 * AJAX handler to provision custom fields for all locations.
-	 */
-	public function ajax_provision_fields() {
-		check_ajax_referer( 'aqm_ghl_admin', 'nonce' );
-
-		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Unauthorized.', 'aqm-ghl' ) ), 403 );
-		}
-
-		$settings = aqm_ghl_get_settings();
-
-		$auth = aqm_ghl_get_active_auth();
-
-		if ( is_wp_error( $auth ) ) {
-			wp_send_json_error(
-				array(
-					'message' => __( 'Connect to GoHighLevel before provisioning custom fields.', 'aqm-ghl' ) . ' ' . $auth->get_error_message(),
-				),
-				400
-			);
-		}
-
-		$settings['location_id']   = $auth['location_id'];
-		$settings['private_token'] = $auth['token'];
-
-		$provisioner = new AQM_GHL_Custom_Field_Provisioner();
-
-		// Clear cache and force refresh
-		$provisioner->clear_cache( $settings['location_id'] );
-		$mapping = $provisioner->get_field_mapping( $settings['location_id'], $settings['private_token'], true );
-
-		if ( ! empty( $mapping ) ) {
-			// Keep Formidable hidden-field defaults and mappings in sync after provisioning.
-			$sync = aqm_ghl_sync_ghl_fields_to_forms();
-			wp_send_json_success(
-				array(
-					'message' => sprintf(
-						/* translators: %d: number of fields */
-						__( 'Successfully provisioned %d custom fields.', 'aqm-ghl' ),
-						count( $mapping )
-					),
-					'field_count' => count( $mapping ),
-					'sync'        => $sync,
-				)
-			);
-		} else {
-			// Try to get more specific error information
-			$test_response = wp_remote_get(
-				sprintf( 'https://services.leadconnectorhq.com/locations/%s/customFields', $settings['location_id'] ),
-				array(
-					'headers' => array(
-						'Authorization' => 'Bearer ' . $settings['private_token'],
-						'Content-Type'  => 'application/json',
-						'Version'       => '2021-07-28',
-					),
-					'timeout' => 15,
-				)
-			);
-			
-			$error_message = __( 'Failed to provision fields. Check logs for details.', 'aqm-ghl' );
-			
-			if ( ! is_wp_error( $test_response ) ) {
-				$test_code = wp_remote_retrieve_response_code( $test_response );
-				$test_body = wp_remote_retrieve_body( $test_response );
-				
-				if ( $test_code === 401 || $test_code === 403 ) {
-					$error_message = __( 'Failed to provision fields: The saved token was rejected by GoHighLevel (401/403). If your integration already has "View Custom Fields" and "Edit Custom Fields" scopes, copy the token again from that same integration in GoHighLevel, paste it in the Private Integration Token field above, click Save Settings, then try Refresh/Provision again. Otherwise add locations/customFields.readonly and locations/customFields.write to your token scopes and paste the new token here.', 'aqm-ghl' );
-				} elseif ( $test_code >= 400 ) {
-					$error_message = sprintf(
-						/* translators: 1: status code, 2: error body */
-						__( 'Failed to provision fields: API returned status %1$d: %2$s', 'aqm-ghl' ),
-						$test_code,
-						substr( $test_body, 0, 200 )
-					);
-				}
-			}
-			
-			wp_send_json_error(
-				array(
-					'message' => $error_message,
-				),
-				500
-			);
-		}
-	}
-
-	/**
-	 * AJAX handler to fetch all custom fields from the GoHighLevel API.
-	 */
-	public function ajax_fetch_ghl_fields() {
-		check_ajax_referer( 'aqm_ghl_admin', 'nonce' );
-
-		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Unauthorized', 'aqm-ghl' ) ), 403 );
-		}
-
-		$settings = aqm_ghl_get_settings();
-
-		$auth = aqm_ghl_get_active_auth();
-
-		if ( is_wp_error( $auth ) ) {
-			wp_send_json_error(
-				array(
-					'message' => __( 'Connect to GoHighLevel before fetching custom fields.', 'aqm-ghl' ) . ' ' . $auth->get_error_message(),
-				),
-				400
-			);
-		}
-
-		$settings['location_id']   = $auth['location_id'];
-		$settings['private_token'] = $auth['token'];
-
-		$fields = aqm_ghl_fetch_ghl_custom_fields( $settings['location_id'], $settings['private_token'], true );
-
-		if ( is_wp_error( $fields ) ) {
-			wp_send_json_error(
-				array(
-					'message' => $fields->get_error_message(),
-				),
-				500
-			);
-		}
-
-		// Sync: create hidden fields in Formidable forms and auto-map.
-		$sync = aqm_ghl_sync_ghl_fields_to_forms();
-
-		wp_send_json_success(
-			array(
-				'fields'  => $fields,
-				'count'   => count( $fields ),
-				'sync'    => $sync,
-			)
-		);
-	}
-
-	/**
-	 * Handle export: output JSON file with all settings (including credentials).
-	 */
-	public function handle_export_settings() {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'You do not have permission to export settings.', 'aqm-ghl' ), 403 );
-		}
-		if ( ! isset( $_GET['_wpnonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'aqm_ghl_export' ) ) {
-			wp_die( esc_html__( 'Security check failed.', 'aqm-ghl' ), 403 );
-		}
-
-		$data  = aqm_ghl_export_settings_data();
-		$json  = wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
-		$filename = 'aqm-ghl-connector-settings-' . gmdate( 'Y-m-d-His' ) . '.json';
-		header( 'Content-Type: application/json; charset=' . get_option( 'blog_charset' ) );
-		header( 'Content-Disposition: attachment; filename="' . sanitize_file_name( $filename ) . '"' );
-		header( 'Cache-Control: no-cache, must-revalidate' );
-		header( 'Expires: 0' );
-		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- JSON export, not HTML
-		echo $json;
-		exit;
-	}
-
-	/**
-	 * Handle import: validate JSON and save all settings.
-	 */
-	public function handle_import_settings() {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'You do not have permission to import settings.', 'aqm-ghl' ), 403 );
-		}
-		$redirect_url = admin_url( 'admin.php?page=aqm-ghl-connector' );
-
-		if ( ! isset( $_POST['aqm_ghl_import_nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['aqm_ghl_import_nonce'] ) ), 'aqm_ghl_import' ) ) {
-			wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'error_nonce', $redirect_url ) );
-			exit;
-		}
-
-		$raw = '';
-		if ( ! empty( $_FILES['aqm_ghl_import_file']['tmp_name'] ) && is_uploaded_file( $_FILES['aqm_ghl_import_file']['tmp_name'] ) ) {
-			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
-			$raw = file_get_contents( $_FILES['aqm_ghl_import_file']['tmp_name'] );
-		} elseif ( ! empty( $_POST['aqm_ghl_import_json'] ) && is_string( $_POST['aqm_ghl_import_json'] ) ) {
-			$raw = wp_unslash( $_POST['aqm_ghl_import_json'] );
-		}
-
-		if ( '' === $raw ) {
-			wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'error_empty', $redirect_url ) );
-			exit;
-		}
-
-		$data = json_decode( $raw, true );
-		if ( json_last_error() !== JSON_ERROR_NONE || ! is_array( $data ) ) {
-			wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'error_json', $redirect_url ) );
-			exit;
-		}
-
-		$result = aqm_ghl_import_settings_data( $data );
-		if ( is_wp_error( $result ) ) {
-			wp_safe_redirect( add_query_arg( array( 'aqm_ghl_import' => 'error', 'aqm_ghl_message' => rawurlencode( $result->get_error_message() ) ), $redirect_url ) );
-			exit;
-		}
-
-		wp_safe_redirect( add_query_arg( 'aqm_ghl_import', 'success', $redirect_url ) );
-		exit;
-	}
 }
 
 

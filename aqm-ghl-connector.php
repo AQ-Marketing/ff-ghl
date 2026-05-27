@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AQM GHL Formidable Connector
  * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts. Supports two auth modes: legacy Private Integration Token (per sub-account) or OAuth via the AQM Marketplace App (per-install Connect button, tokens auto-refresh forever).
- * Version:     2.3.6
+ * Version:     2.4.0
  * Author: AQMarketing
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'AQM_GHL_CONNECTOR_VERSION', '2.3.6' );
+define( 'AQM_GHL_CONNECTOR_VERSION', '2.4.0' );
 define( 'AQM_GHL_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AQM_GHL_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 define( 'AQM_GHL_OPTION_KEY', 'aqm_ghl_connector_settings' );
@@ -148,7 +148,6 @@ require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-utm-tracker.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-custom-field-provisioner.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-admin.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-handler.php';
-require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-form-submitter.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-opportunity-pusher.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-oauth.php';
 require_once AQM_GHL_CONNECTOR_DIR . 'includes/class-aqm-ghl-updater.php';
@@ -167,7 +166,6 @@ add_action( 'plugins_loaded', 'aqm_ghl_connector_init_utm_tracker', 5 );
 function aqm_ghl_connector_init() {
 	new AQM_GHL_Admin();
 	new AQM_GHL_Handler();
-	new AQM_GHL_Form_Submitter();
 	new AQM_GHL_Opportunity_Pusher();
 	new AQM_GHL_OAuth();
 
