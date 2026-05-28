@@ -6,3 +6,10 @@ node_modules/
 vendor/
 .claude/
 .mcp.json
+
+# Local credential / secret files — never commit
+*[Ss]ecret*
+*token*.txt
+*-token.txt
+*credentials*
+*.env
