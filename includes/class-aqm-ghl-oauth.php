@@ -176,6 +176,9 @@ class AQM_GHL_OAuth {
 
 		update_option( AQM_GHL_OPTION_KEY, $settings, false );
 
+		// Tokens are gone — the cached "yes, you're connected" verdict must die.
+		self::invalidate_verification_cache();
+
 		$this->redirect_to_settings( 'disconnected' );
 	}
 
@@ -256,6 +259,9 @@ class AQM_GHL_OAuth {
 		}
 
 		update_option( AQM_GHL_OPTION_KEY, $settings, false );
+
+		// Fresh tokens — any prior "is this connected?" verdict is now stale.
+		self::invalidate_verification_cache();
 	}
 
 	/**
@@ -381,13 +387,71 @@ class AQM_GHL_OAuth {
 	}
 
 	/**
-	 * Whether the plugin currently has a valid (or refreshable) OAuth connection.
+	 * Whether the plugin currently has OAuth tokens stored. PASSIVE check —
+	 * doesn't verify that the tokens still work against GoHighLevel. Kept for
+	 * callers that just need to know "has the user gone through Connect yet?"
+	 * (e.g. settings persistence, the auth router's "do we have any creds at
+	 * all" gate). For UI state — "should we tell the user they're connected?"
+	 * — use `is_truly_connected()` instead.
 	 *
 	 * @return bool
 	 */
 	public static function is_connected() {
 		$settings = aqm_ghl_get_settings();
 		return ! empty( $settings['oauth_access_token'] ) && ! empty( $settings['oauth_refresh_token'] );
+	}
+
+	/**
+	 * Cache key for the live-verification result. Bumped automatically whenever
+	 * tokens are stored (see `store_tokens`) or cleared (see `disconnect`) so
+	 * the cached verdict can't get stale across (re)connect cycles.
+	 */
+	const VERIFY_TRANSIENT = 'aqm_ghl_oauth_verified';
+
+	/**
+	 * ACTIVE check — verifies the stored tokens still work. Calls
+	 * `get_access_token()`, which refreshes via the GHL token endpoint if the
+	 * access_token is past its expiry buffer. If the refresh fails (revoked
+	 * app, rotated company secret, deleted sub-account, etc.), we know we are
+	 * NOT truly connected.
+	 *
+	 * Cached for 5 minutes via a transient so we don't ping the GHL token
+	 * endpoint on every admin page render. The cache is invalidated whenever
+	 * tokens are stored or disconnected.
+	 *
+	 * @param bool $force_fresh Skip the cache and re-verify now.
+	 * @return bool
+	 */
+	public static function is_truly_connected( $force_fresh = false ) {
+		// Cheap short-circuit: if no tokens at all, no need to ping anything.
+		if ( ! self::is_connected() ) {
+			return false;
+		}
+
+		if ( ! $force_fresh ) {
+			$cached = get_transient( self::VERIFY_TRANSIENT );
+			if ( false !== $cached ) {
+				return ( '1' === (string) $cached );
+			}
+		}
+
+		$instance = new self();
+		$result   = $instance->get_access_token();
+		$ok       = ! is_wp_error( $result ) && '' !== (string) $result;
+
+		// Short TTL — tokens can be revoked out-of-band, and we want the UI
+		// to react reasonably quickly without spamming the GHL endpoint.
+		set_transient( self::VERIFY_TRANSIENT, $ok ? '1' : '0', 5 * MINUTE_IN_SECONDS );
+
+		return $ok;
+	}
+
+	/**
+	 * Public hook so other code (token refresh, disconnect, store) can drop
+	 * the cached verification verdict.
+	 */
+	public static function invalidate_verification_cache() {
+		delete_transient( self::VERIFY_TRANSIENT );
 	}
 
 	/**

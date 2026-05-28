@@ -210,7 +210,8 @@ class AQM_GHL_Admin {
 			<?php endif; ?>
 			<?php
 			// Configuration completeness check: have an auth method (OAuth OR legacy PIT) AND at least one form picked.
-			$oauth_connected = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
+			// Uses the ACTIVE verification — tokens that exist but no longer work shouldn't count as "set up".
+			$oauth_connected = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_truly_connected();
 			$pit_configured  = ! empty( $settings['location_id'] ) && ! empty( $settings['private_token'] );
 			$has_auth        = $oauth_connected || $pit_configured;
 			$has_forms       = ! empty( $settings['form_ids'] );
@@ -450,7 +451,16 @@ class AQM_GHL_Admin {
 		$msg     = isset( $_GET['aqm_oauth_message'] ) ? sanitize_text_field( wp_unslash( $_GET['aqm_oauth_message'] ) ) : '';
 		$err     = isset( $_GET['aqm_oauth_err'] )     ? sanitize_text_field( wp_unslash( $_GET['aqm_oauth_err'] ) )     : '';
 
-		$is_connected     = class_exists( 'AQM_GHL_OAuth' ) ? AQM_GHL_OAuth::is_connected() : false;
+		// Two different "connected" checks:
+		//   - has_tokens: passive — are OAuth tokens persisted at all?
+		//   - is_connected: active — do those tokens still work against GHL?
+		// We only flip the UI to the "Connected" card when BOTH are true. If
+		// tokens exist but verification fails (revoked app, rotated secret,
+		// deleted sub-account, etc.) we show a "Connection lost" state with
+		// a fresh Connect button instead of falsely claiming connected status.
+		$has_tokens       = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
+		$is_connected     = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_truly_connected();
+		$tokens_broken    = $has_tokens && ! $is_connected;
 		$location_name    = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
 		$location_id      = isset( $settings['oauth_location_id'] )   ? (string) $settings['oauth_location_id']   : '';
 		$expires_at       = isset( $settings['oauth_token_expires_at'] ) ? (int) $settings['oauth_token_expires_at'] : 0;
@@ -526,6 +536,18 @@ class AQM_GHL_Admin {
 			$tail         = $has_secret ? substr( $saved_secret, -4 ) : '';
 			$secret_hint  = $has_secret ? str_repeat( '•', 8 ) . $tail . ' (saved)' : '';
 			?>
+
+			<?php if ( $tokens_broken ) : ?>
+				<!-- Tokens exist in DB but live verification failed — could be a revoked app,
+				     rotated company client_secret, or the sub-account being deleted on GHL. -->
+				<div class="notice notice-error" style="margin: 1em 0;">
+					<p>
+						<strong><?php esc_html_e( 'GoHighLevel connection lost.', 'aqm-ghl' ); ?></strong>
+						<?php esc_html_e( 'Stored credentials are no longer valid (the app may have been revoked or the secret rotated). Click Connect below to re-authorize.', 'aqm-ghl' ); ?>
+					</p>
+				</div>
+			<?php endif; ?>
+
 			<!-- COMPACT CONNECT SETUP CARD -->
 			<div style="margin: 1em 0; border: 1px solid #2271b1; background: #fff; padding: 12px 16px;">
 				<div style="display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap;">
