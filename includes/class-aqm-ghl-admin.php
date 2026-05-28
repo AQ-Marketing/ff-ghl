@@ -179,8 +179,55 @@ class AQM_GHL_Admin {
 		$last_submission_context = ! empty( $last_submission['context'] ) ? wp_json_encode( $last_submission['context'], JSON_PRETTY_PRINT ) : '';
 		$import_status = isset( $_GET['aqm_ghl_import'] ) ? sanitize_text_field( wp_unslash( $_GET['aqm_ghl_import'] ) ) : '';
 		?>
+		<?php
+		// ── Connection status eyebrow ──
+		// Single source of truth for the badge under the page title. Reflects the
+		// ACTIVE verification (tokens that exist but no longer work read as "lost",
+		// not "connected"). PIT-only legacy sites still read as connected.
+		$eyebrow_oauth_ok   = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_truly_connected();
+		$eyebrow_oauth_has  = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
+		$eyebrow_pit_ok     = ! empty( $settings['location_id'] ) && ! empty( $settings['private_token'] );
+		$eyebrow_loc_name   = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
+
+		if ( $eyebrow_oauth_ok || $eyebrow_pit_ok ) {
+			$eyebrow_state = 'connected';
+		} elseif ( $eyebrow_oauth_has ) {
+			$eyebrow_state = 'lost'; // tokens stored but verification failed
+		} else {
+			$eyebrow_state = 'disconnected';
+		}
+		?>
 		<div class="wrap aqm-ghl-wrap">
-			<h1><?php esc_html_e( 'GHL + Formidable', 'aqm-ghl' ); ?></h1>
+			<h1 style="margin-bottom: 4px;"><?php esc_html_e( 'GHL + Formidable', 'aqm-ghl' ); ?></h1>
+
+			<?php
+			$eyebrow_styles = array(
+				'connected'    => array( 'bg' => '#edfaef', 'border' => '#00a32a', 'dot' => '#00a32a', 'text' => '#0a4f1c' ),
+				'lost'         => array( 'bg' => '#fcf0f1', 'border' => '#d63638', 'dot' => '#d63638', 'text' => '#8a1f21' ),
+				'disconnected' => array( 'bg' => '#f6f7f7', 'border' => '#c3c4c7', 'dot' => '#a7aaad', 'text' => '#50575e' ),
+			);
+			$es = $eyebrow_styles[ $eyebrow_state ];
+			?>
+			<div style="margin: 0 0 16px;">
+				<span style="display: inline-flex; align-items: center; gap: 7px; padding: 4px 12px; border: 1px solid <?php echo esc_attr( $es['border'] ); ?>; background: <?php echo esc_attr( $es['bg'] ); ?>; border-radius: 999px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: <?php echo esc_attr( $es['text'] ); ?>;">
+					<span style="width: 8px; height: 8px; border-radius: 50%; background: <?php echo esc_attr( $es['dot'] ); ?>; <?php echo 'connected' === $eyebrow_state ? 'box-shadow: 0 0 0 3px ' . esc_attr( $es['bg'] ) . ', 0 0 6px ' . esc_attr( $es['dot'] ) . ';' : ''; ?>"></span>
+					<?php
+					if ( 'connected' === $eyebrow_state ) {
+						if ( '' !== $eyebrow_loc_name ) {
+							/* translators: %s: GHL sub-account name */
+							printf( esc_html__( 'Connected to GoHighLevel · %s', 'aqm-ghl' ), esc_html( $eyebrow_loc_name ) );
+						} else {
+							esc_html_e( 'Connected to GoHighLevel', 'aqm-ghl' );
+						}
+					} elseif ( 'lost' === $eyebrow_state ) {
+						esc_html_e( 'GoHighLevel connection lost — reconnect', 'aqm-ghl' );
+					} else {
+						esc_html_e( 'Not connected to GoHighLevel', 'aqm-ghl' );
+					}
+					?>
+				</span>
+			</div>
+
 			<?php settings_errors(); ?>
 			<?php if ( 'success' === $import_status ) : ?>
 				<div class="notice notice-success is-dismissible">
