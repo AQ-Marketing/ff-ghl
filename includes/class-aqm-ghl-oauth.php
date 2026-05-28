@@ -96,7 +96,21 @@ class AQM_GHL_OAuth {
 	 * @return string
 	 */
 	private static function sign_state( $payload_b64, $client_secret ) {
-		return self::b64url_encode( hash_hmac( 'sha256', $payload_b64, $client_secret, true ) );
+		return self::b64url_encode( hash_hmac( 'sha256', $payload_b64, self::derive_signing_key( $client_secret ), true ) );
+	}
+
+	/**
+	 * Derive the broker's state-signing key from the raw client_secret. The
+	 * broker holds ONLY this derived key (least privilege): it's sufficient to
+	 * verify state signatures but useless for exchanging OAuth codes for tokens
+	 * (which requires the raw client_secret, kept on the WP sites only). So a
+	 * broker compromise cannot be escalated into token theft.
+	 *
+	 * @param string $client_secret Raw marketplace app secret.
+	 * @return string Raw 32-byte key.
+	 */
+	private static function derive_signing_key( $client_secret ) {
+		return hash_hmac( 'sha256', AQM_GHL_OAUTH_STATE_KEY_CONTEXT, $client_secret, true );
 	}
 
 	/**

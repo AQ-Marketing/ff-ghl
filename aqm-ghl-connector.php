@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AQM GHL Formidable Connector
  * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts. One-click Connect via the AQM Marketplace App (OAuth), routed through a central redirect broker so a single app serves every client site. Tokens auto-refresh.
- * Version:     2.7.0
+ * Version:     2.8.0
  * Author: AQMarketing
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'AQM_GHL_CONNECTOR_VERSION', '2.7.0' );
+define( 'AQM_GHL_CONNECTOR_VERSION', '2.8.0' );
 define( 'AQM_GHL_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AQM_GHL_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 define( 'AQM_GHL_OPTION_KEY', 'aqm_ghl_connector_settings' );
@@ -33,6 +33,14 @@ define( 'AQM_GHL_OAUTH_CALLBACK_ACTION', 'aqm_oauth_callback' ); // No 'ghl' in 
 // OAuth `state`). This is the ONE URL that must be registered as a redirect
 // URI in the GHL Marketplace app. Source: Apps/ghl-oauth-broker (Cloudflare Worker).
 define( 'AQM_GHL_OAUTH_REDIRECT_URI', 'https://aqm-ghl-oauth.robert-ff9.workers.dev/callback' );
+
+// Context label for deriving the broker's state-signing key from the client
+// secret: signing_key = HMAC_SHA256( context, client_secret ). The broker
+// stores ONLY this derived key, never the raw client_secret — so even a full
+// broker compromise can forge nothing beyond low-value state signatures and
+// can NEVER exchange OAuth codes for tokens (that needs the raw secret, which
+// lives only on the WP sites). Bump the version suffix to rotate the key.
+define( 'AQM_GHL_OAUTH_STATE_KEY_CONTEXT', 'aqm-ghl-oauth-broker-v1' );
 
 // DIAGNOSTIC: capture fatal + memory usage at each WP boot phase on settings page.
 // Gated behind WP_DEBUG so it never writes a log file (or responds to the page
