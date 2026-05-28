@@ -18,6 +18,13 @@ class AQM_GHL_Admin {
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
 		add_action( 'wp_ajax_aqm_ghl_test_connection', array( $this, 'ajax_test_connection' ) );
 		add_action( 'wp_ajax_aqm_ghl_clear_update_cache', array( $this, 'ajax_clear_update_cache' ) );
+		// Private Integration Token connect/disconnect — the primary, reliable
+		// auth path. GHL's marketplace OAuth flow has an unrecoverable
+		// "orphaned install" failure mode (once installed, GHL greys out
+		// re-install and never re-issues an auth code), so PIT is the path
+		// that actually works across many client sub-accounts.
+		add_action( 'admin_post_aqm_ghl_pit_connect',    array( $this, 'handle_pit_connect' ) );
+		add_action( 'admin_post_aqm_ghl_pit_disconnect', array( $this, 'handle_pit_disconnect' ) );
 	}
 
 	/**
@@ -181,15 +188,28 @@ class AQM_GHL_Admin {
 		?>
 		<?php
 		// ── Connection status eyebrow ──
-		// Single source of truth for the badge under the page title. Reflects the
-		// ACTIVE verification (tokens that exist but no longer work read as "lost",
-		// not "connected"). PIT-only legacy sites still read as connected.
-		$eyebrow_oauth_ok   = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_truly_connected();
-		$eyebrow_oauth_has  = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
-		$eyebrow_pit_ok     = ! empty( $settings['location_id'] ) && ! empty( $settings['private_token'] );
-		$eyebrow_loc_name   = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
+		// Single source of truth for the badge under the page title. PIT is the
+		// primary path: a saved token + location_id reads as connected (PITs
+		// don't expire). OAuth uses the ACTIVE verification (stored-but-broken
+		// tokens read as "lost", not "connected").
+		$eyebrow_oauth_ok  = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_truly_connected();
+		$eyebrow_oauth_has = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
 
-		if ( $eyebrow_oauth_ok || $eyebrow_pit_ok ) {
+		// PIT detection — top-level scalars, falling back to locations[0].
+		$eyebrow_pit_token = ! empty( $settings['private_token'] )
+			? (string) $settings['private_token']
+			: ( ! empty( $settings['locations'][0]['private_token'] ) ? (string) $settings['locations'][0]['private_token'] : '' );
+		$eyebrow_pit_loc   = ! empty( $settings['location_id'] )
+			? (string) $settings['location_id']
+			: ( ! empty( $settings['locations'][0]['location_id'] ) ? (string) $settings['locations'][0]['location_id'] : '' );
+		$eyebrow_pit_ok    = ( '' !== $eyebrow_pit_token && '' !== $eyebrow_pit_loc );
+
+		// Display name: prefer the PIT sub-account name, then the OAuth one.
+		$eyebrow_loc_name = ! empty( $settings['locations'][0]['name'] )
+			? (string) $settings['locations'][0]['name']
+			: ( isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '' );
+
+		if ( $eyebrow_pit_ok || $eyebrow_oauth_ok ) {
 			$eyebrow_state = 'connected';
 		} elseif ( $eyebrow_oauth_has ) {
 			$eyebrow_state = 'lost'; // tokens stored but verification failed
@@ -256,11 +276,13 @@ class AQM_GHL_Admin {
 				</div>
 			<?php endif; ?>
 			<?php
-			// Configuration completeness check: have an auth method (OAuth OR legacy PIT) AND at least one form picked.
-			// Uses the ACTIVE verification — tokens that exist but no longer work shouldn't count as "set up".
+			// Configuration completeness check: have an auth method (PIT OR OAuth) AND at least one form picked.
+			// PIT is the primary path; OAuth uses ACTIVE verification (stored-but-broken tokens don't count).
+			$pit_token_set   = ! empty( $settings['private_token'] ) || ! empty( $settings['locations'][0]['private_token'] );
+			$pit_loc_set     = ! empty( $settings['location_id'] ) || ! empty( $settings['locations'][0]['location_id'] );
+			$pit_configured  = $pit_token_set && $pit_loc_set;
 			$oauth_connected = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_truly_connected();
-			$pit_configured  = ! empty( $settings['location_id'] ) && ! empty( $settings['private_token'] );
-			$has_auth        = $oauth_connected || $pit_configured;
+			$has_auth        = $pit_configured || $oauth_connected;
 			$has_forms       = ! empty( $settings['form_ids'] );
 			?>
 			<?php // Only nag about forms here — the "Connect to GoHighLevel" card below
@@ -487,204 +509,402 @@ class AQM_GHL_Admin {
 	}
 
 	/**
-	 * Render the Authentication section — OAuth Connect flow + legacy PIT
-	 * fields side-by-side. Surfaces the result of any in-flight OAuth handoff
-	 * via the `aqm_oauth_status` URL parameter set by AQM_GHL_OAuth.
+	 * Render the Authentication section. Private Integration Token (PIT) is the
+	 * PRIMARY path — it's the only auth method that works reliably across many
+	 * client sub-accounts. GHL's marketplace OAuth flow has an unrecoverable
+	 * "orphaned install" failure mode (documented in the AutoGHL project): once
+	 * the app is installed on a sub-account GHL greys out re-install and never
+	 * re-issues an authorization code, so the WP site never receives tokens.
+	 * OAuth is kept as a collapsed fallback for any site already running on it.
 	 *
 	 * @param array $settings Current plugin settings.
 	 */
 	private function render_authentication_section( $settings ) {
+		// ── PIT connect status (from handle_pit_connect redirects) ──
+		$pit_status = isset( $_GET['aqm_pit_status'] ) ? sanitize_text_field( wp_unslash( $_GET['aqm_pit_status'] ) ) : '';
+		$pit_msg    = isset( $_GET['aqm_pit_msg'] )    ? sanitize_text_field( wp_unslash( $_GET['aqm_pit_msg'] ) )    : '';
+
+		// ── OAuth status (legacy fallback flow) ──
 		$status  = isset( $_GET['aqm_oauth_status'] )  ? sanitize_text_field( wp_unslash( $_GET['aqm_oauth_status'] ) )  : '';
 		$msg     = isset( $_GET['aqm_oauth_message'] ) ? sanitize_text_field( wp_unslash( $_GET['aqm_oauth_message'] ) ) : '';
-		$err     = isset( $_GET['aqm_oauth_err'] )     ? sanitize_text_field( wp_unslash( $_GET['aqm_oauth_err'] ) )     : '';
 
-		// Two different "connected" checks:
-		//   - has_tokens: passive — are OAuth tokens persisted at all?
-		//   - is_connected: active — do those tokens still work against GHL?
-		// We only flip the UI to the "Connected" card when BOTH are true. If
-		// tokens exist but verification fails (revoked app, rotated secret,
-		// deleted sub-account, etc.) we show a "Connection lost" state with
-		// a fresh Connect button instead of falsely claiming connected status.
-		$has_tokens       = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
-		$is_connected     = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_truly_connected();
-		$tokens_broken    = $has_tokens && ! $is_connected;
-		$location_name    = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
-		$location_id      = isset( $settings['oauth_location_id'] )   ? (string) $settings['oauth_location_id']   : '';
-		$expires_at       = isset( $settings['oauth_token_expires_at'] ) ? (int) $settings['oauth_token_expires_at'] : 0;
-		$active_mode      = function_exists( 'aqm_ghl_get_auth_mode' ) ? aqm_ghl_get_auth_mode() : 'pit';
+		// ── Resolve PIT config (top-level scalars, falling back to locations[0]) ──
+		$pit_token = isset( $settings['private_token'] ) && '' !== (string) $settings['private_token']
+			? (string) $settings['private_token']
+			: ( ! empty( $settings['locations'][0]['private_token'] ) ? (string) $settings['locations'][0]['private_token'] : '' );
+		$pit_loc   = isset( $settings['location_id'] ) && '' !== (string) $settings['location_id']
+			? (string) $settings['location_id']
+			: ( ! empty( $settings['locations'][0]['location_id'] ) ? (string) $settings['locations'][0]['location_id'] : '' );
+		$pit_name  = ! empty( $settings['locations'][0]['name'] ) ? (string) $settings['locations'][0]['name'] : '';
+		$pit_ok    = ( '' !== $pit_token && '' !== $pit_loc );
+
+		// ── Resolve OAuth state (fallback path) ──
+		$oauth_truly   = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_truly_connected();
+		$oauth_name    = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
+		$oauth_loc     = isset( $settings['oauth_location_id'] )   ? (string) $settings['oauth_location_id']   : '';
 		?>
 
-		<?php // Status notices from the OAuth flow redirects ?>
-		<?php if ( 'connected' === $status ) : ?>
+		<?php // ── PIT connect result notices ── ?>
+		<?php if ( 'connected' === $pit_status ) : ?>
 			<div class="notice notice-success is-dismissible"><p>
 				<strong><?php esc_html_e( '✓ Connected to GoHighLevel.', 'aqm-ghl' ); ?></strong>
-				<?php esc_html_e( 'Tokens will auto-refresh — you don\'t need to reconnect.', 'aqm-ghl' ); ?>
+				<?php esc_html_e( 'Private Integration Token verified — form submissions will now flow to this sub-account.', 'aqm-ghl' ); ?>
+			</p></div>
+		<?php elseif ( 'disconnected' === $pit_status ) : ?>
+			<div class="notice notice-info is-dismissible"><p>
+				<?php esc_html_e( 'Disconnected from GoHighLevel. Paste a Private Integration Token below to reconnect.', 'aqm-ghl' ); ?>
+			</p></div>
+		<?php elseif ( 'error' === $pit_status ) : ?>
+			<div class="notice notice-error is-dismissible"><p>
+				<strong><?php esc_html_e( 'Couldn\'t verify that token.', 'aqm-ghl' ); ?></strong>
+				<?php if ( '' !== $pit_msg ) : ?>
+					<br><code style="white-space: pre-wrap;"><?php echo esc_html( $pit_msg ); ?></code>
+				<?php endif; ?>
+			</p></div>
+		<?php endif; ?>
+
+		<?php // ── OAuth fallback result notices ── ?>
+		<?php if ( 'connected' === $status ) : ?>
+			<div class="notice notice-success is-dismissible"><p>
+				<strong><?php esc_html_e( '✓ Connected to GoHighLevel via OAuth.', 'aqm-ghl' ); ?></strong>
 			</p></div>
 		<?php elseif ( 'disconnected' === $status ) : ?>
 			<div class="notice notice-info is-dismissible"><p>
-				<?php esc_html_e( 'Disconnected from GoHighLevel. Reconnect below when you\'re ready.', 'aqm-ghl' ); ?>
+				<?php esc_html_e( 'Disconnected from GoHighLevel (OAuth).', 'aqm-ghl' ); ?>
 			</p></div>
 		<?php elseif ( '' !== $status ) : ?>
 			<div class="notice notice-error is-dismissible"><p>
-				<strong><?php esc_html_e( 'GoHighLevel connection failed.', 'aqm-ghl' ); ?></strong>
+				<strong><?php esc_html_e( 'GoHighLevel OAuth connection failed.', 'aqm-ghl' ); ?></strong>
 				<?php if ( '' !== $msg ) : ?>
 					<br><code style="white-space: pre-wrap;"><?php echo esc_html( $msg ); ?></code>
 				<?php endif; ?>
 			</p></div>
 		<?php endif; ?>
 
-		<?php if ( 'missing_secret' === $err ) : ?>
-			<div class="notice notice-error is-dismissible"><p>
-				<?php esc_html_e( 'Paste the AQM Client Secret below and save before clicking Connect.', 'aqm-ghl' ); ?>
-			</p></div>
-		<?php endif; ?>
-
-		<?php if ( $is_connected ) : ?>
+		<?php if ( $pit_ok || $oauth_truly ) : ?>
+			<?php
+			// CONNECTED — show the active connection. PIT takes precedence since
+			// it's the primary path; OAuth only shows if PIT isn't configured.
+			$shown_mode = $pit_ok ? 'pit' : 'oauth';
+			$shown_name = $pit_ok ? $pit_name : $oauth_name;
+			$shown_loc  = $pit_ok ? $pit_loc  : $oauth_loc;
+			?>
 			<!-- COMPACT CONNECTED STATUS CARD -->
 			<div style="margin: 1em 0; border-left: 4px solid #00a32a; background: #fff; padding: 14px 18px; box-shadow: 0 1px 1px rgba(0,0,0,0.04);">
 				<div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
 					<span style="font-size: 22px; line-height: 1;">✓</span>
 					<div style="flex: 1; min-width: 220px;">
 						<strong style="font-size: 15px;"><?php esc_html_e( 'Connected to GoHighLevel', 'aqm-ghl' ); ?></strong>
-						<div style="color: #50575e; font-size: 13px; margin-top: 2px;">
+						<span style="display: inline-block; margin-left: 8px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #50575e; background: #f0f0f1; padding: 2px 7px; border-radius: 3px;">
+							<?php echo 'pit' === $shown_mode ? esc_html__( 'Private Integration Token', 'aqm-ghl' ) : esc_html__( 'OAuth', 'aqm-ghl' ); ?>
+						</span>
+						<div style="color: #50575e; font-size: 13px; margin-top: 4px;">
 							<?php
-							if ( $location_name ) {
+							if ( '' !== $shown_name ) {
 								printf(
 									/* translators: %s: sub-account display name */
 									esc_html__( 'Sub-account: %s', 'aqm-ghl' ),
-									'<strong>' . esc_html( $location_name ) . '</strong>'
+									'<strong>' . esc_html( $shown_name ) . '</strong> '
 								);
-							} else {
-								echo '<code style="font-size: 11px;">' . esc_html( $location_id ) . '</code>';
+							}
+							if ( '' !== $shown_loc ) {
+								echo '<code style="font-size: 11px;">' . esc_html( $shown_loc ) . '</code>';
 							}
 							?>
 						</div>
 					</div>
 					<div>
-						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block;">
-							<input type="hidden" name="action" value="aqm_oauth_start" />
-							<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
-							<button type="submit" class="button button-secondary"><?php esc_html_e( 'Reconnect', 'aqm-ghl' ); ?></button>
-						</form>
-						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block; margin-left: 4px;">
-							<input type="hidden" name="action" value="aqm_oauth_disconnect" />
-							<?php wp_nonce_field( 'aqm_oauth_disconnect' ); ?>
-							<button type="submit" class="button"><?php esc_html_e( 'Disconnect', 'aqm-ghl' ); ?></button>
-						</form>
+						<?php if ( 'pit' === $shown_mode ) : ?>
+							<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block;">
+								<input type="hidden" name="action" value="aqm_ghl_pit_disconnect" />
+								<?php wp_nonce_field( 'aqm_ghl_pit_disconnect' ); ?>
+								<button type="submit" class="button"><?php esc_html_e( 'Disconnect', 'aqm-ghl' ); ?></button>
+							</form>
+						<?php else : ?>
+							<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block;">
+								<input type="hidden" name="action" value="aqm_oauth_disconnect" />
+								<?php wp_nonce_field( 'aqm_oauth_disconnect' ); ?>
+								<button type="submit" class="button"><?php esc_html_e( 'Disconnect', 'aqm-ghl' ); ?></button>
+							</form>
+						<?php endif; ?>
 					</div>
 				</div>
 			</div>
 		<?php else : ?>
 			<?php
-			// Show the last 4 chars of the saved secret so the user can verify
-			// which value is active without exposing the full secret in the DOM.
-			$saved_secret = isset( $settings['oauth_client_secret'] ) ? (string) $settings['oauth_client_secret'] : '';
-			$has_secret   = '' !== $saved_secret;
-			$tail         = $has_secret ? substr( $saved_secret, -4 ) : '';
-			$secret_hint  = $has_secret ? str_repeat( '•', 8 ) . $tail . ' (saved)' : '';
+			$token_hint = '' !== $pit_token ? ( str_repeat( '•', 8 ) . substr( $pit_token, -4 ) . ' (saved)' ) : '';
 			?>
+			<!-- PRIMARY: PRIVATE INTEGRATION TOKEN CONNECT CARD -->
+			<div style="margin: 1em 0; border: 1px solid #2271b1; background: #fff; padding: 16px 18px;">
+				<strong style="font-size: 14px; display: block; margin-bottom: 2px;"><?php esc_html_e( 'Connect to GoHighLevel', 'aqm-ghl' ); ?></strong>
+				<span style="color: #50575e; font-size: 12px; display: block; margin-bottom: 12px;">
+					<?php esc_html_e( 'Paste this sub-account\'s Private Integration Token and its Location ID, then Connect. This is the reliable way to link the site to one sub-account.', 'aqm-ghl' ); ?>
+				</span>
 
-			<?php if ( $tokens_broken ) : ?>
-				<!-- Tokens exist in DB but live verification failed — could be a revoked app,
-				     rotated company client_secret, or the sub-account being deleted on GHL. -->
-				<div class="notice notice-error" style="margin: 1em 0;">
-					<p>
-						<strong><?php esc_html_e( 'GoHighLevel connection lost.', 'aqm-ghl' ); ?></strong>
-						<?php esc_html_e( 'Stored credentials are no longer valid (the app may have been revoked or the secret rotated). Click Connect below to re-authorize.', 'aqm-ghl' ); ?>
-					</p>
-				</div>
-			<?php endif; ?>
-
-			<!-- COMPACT CONNECT SETUP CARD -->
-			<div style="margin: 1em 0; border: 1px solid #2271b1; background: #fff; padding: 12px 16px;">
-				<div style="display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap;">
-					<div style="flex: 1; min-width: 260px;">
-						<strong style="font-size: 14px; display: block; margin-bottom: 2px;"><?php esc_html_e( 'Connect to GoHighLevel', 'aqm-ghl' ); ?></strong>
-						<span style="color: #50575e; font-size: 12px;">
-							<?php esc_html_e( 'Save the AQM Client Secret, then click Connect to pick the sub-account.', 'aqm-ghl' ); ?>
-						</span>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin: 0;">
+					<input type="hidden" name="action" value="aqm_ghl_pit_connect" />
+					<?php wp_nonce_field( 'aqm_ghl_pit_connect' ); ?>
+					<div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end;">
+						<p style="margin: 0; flex: 1; min-width: 280px;">
+							<label for="aqm-pit-token" style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;"><?php esc_html_e( 'Private Integration Token', 'aqm-ghl' ); ?></label>
+							<input
+								type="password"
+								id="aqm-pit-token"
+								name="aqm_pit_token"
+								value=""
+								placeholder="<?php echo '' !== $token_hint ? esc_attr( $token_hint ) : esc_attr__( 'pit-xxxxxxxx-xxxx-...', 'aqm-ghl' ); ?>"
+								style="width: 100%;"
+								autocomplete="new-password"
+							/>
+						</p>
+						<p style="margin: 0; flex: 0 0 220px; min-width: 200px;">
+							<label for="aqm-pit-location" style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;"><?php esc_html_e( 'Location ID (sub-account)', 'aqm-ghl' ); ?></label>
+							<input
+								type="text"
+								id="aqm-pit-location"
+								name="aqm_pit_location_id"
+								value="<?php echo esc_attr( $pit_loc ); ?>"
+								placeholder="<?php esc_attr_e( 'e.g. SECIAqGAAYQATJ56', 'aqm-ghl' ); ?>"
+								style="width: 100%;"
+							/>
+						</p>
+						<p style="margin: 0;">
+							<button type="submit" class="button button-primary"><?php esc_html_e( 'Connect →', 'aqm-ghl' ); ?></button>
+						</p>
 					</div>
+					<?php if ( '' !== $token_hint ) : ?>
+						<p style="margin: 8px 0 0; font-size: 12px; color: #646970;">
+							<?php esc_html_e( 'A token is already saved — leave the token field blank to keep it, or paste a new one to replace it.', 'aqm-ghl' ); ?>
+						</p>
+					<?php endif; ?>
+				</form>
 
-					<form method="post" action="options.php" style="display: flex; align-items: center; gap: 6px; margin: 0; flex-wrap: wrap;">
-						<?php settings_fields( 'aqm_ghl_connector' ); ?>
-						<label for="aqm-ghl-oauth-secret" style="font-size: 12px; font-weight: 600;"><?php esc_html_e( 'Client Secret', 'aqm-ghl' ); ?></label>
-						<input
-							type="password"
-							id="aqm-ghl-oauth-secret"
-							name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[oauth_client_secret]"
-							value=""
-							placeholder="<?php echo $has_secret ? esc_attr( $secret_hint ) : esc_attr__( 'Paste secret', 'aqm-ghl' ); ?>"
-							style="width: 200px;"
-							autocomplete="new-password"
-						/>
-						<button type="submit" class="button button-secondary"><?php esc_html_e( 'Save', 'aqm-ghl' ); ?></button>
-					</form>
-
-					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin: 0;">
-						<input type="hidden" name="action" value="aqm_oauth_start" />
-						<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
-						<button type="submit" class="button button-primary" <?php disabled( ! $has_secret ); ?>>
-							<?php esc_html_e( 'Connect →', 'aqm-ghl' ); ?>
-						</button>
-					</form>
-				</div>
-				<?php if ( ! $has_secret ) : ?>
-					<p style="margin: 8px 0 0; font-size: 12px; color: #646970;">
-						<?php esc_html_e( 'Same secret for every client install — ask Justin / your AQM contact if you don\'t have it.', 'aqm-ghl' ); ?>
-					</p>
-				<?php endif; ?>
-
-				<?php if ( $has_secret ) : ?>
-					<?php
-					// Recovery hint for the #1 stuck state: the user clicks Connect, lands
-					// on GHL's chooser, sees every sub-account already marked "installed",
-					// and is never redirected back — so this page just keeps showing
-					// "Connect →" with no explanation. GHL treats an already-installed
-					// app as a no-op instead of re-issuing an authorization code.
-					$redirect_uri = class_exists( 'AQM_GHL_OAuth' ) ? AQM_GHL_OAuth::get_redirect_uri() : admin_url( 'admin-ajax.php?action=aqm_oauth_callback' );
-					?>
-					<details style="margin: 10px 0 0; border-top: 1px solid #f0f0f1; padding-top: 10px;">
-						<summary style="cursor: pointer; font-size: 12px; font-weight: 600; color: #2271b1;">
-							<?php esc_html_e( 'Clicked Connect but GHL says every sub-account is “already connected” and never sent you back?', 'aqm-ghl' ); ?>
-						</summary>
-						<div style="font-size: 12px; color: #50575e; margin-top: 8px; line-height: 1.6;">
-							<p style="margin: 0 0 8px;">
-								<?php esc_html_e( 'GoHighLevel won’t re-issue authorization when the app is already installed on a sub-account — so it never redirects back here. Re-authorize the one sub-account this site should target:', 'aqm-ghl' ); ?>
-							</p>
-							<ol style="margin: 0 0 8px 18px;">
-								<li><?php esc_html_e( 'In GoHighLevel, switch into the target sub-account.', 'aqm-ghl' ); ?></li>
-								<li><?php esc_html_e( 'Go to Settings → Integrations → My Apps (or Marketplace → Installed Apps).', 'aqm-ghl' ); ?></li>
-								<li><?php esc_html_e( 'Find the AQM GHL Connector app and click Uninstall.', 'aqm-ghl' ); ?></li>
-								<li><?php esc_html_e( 'Come back here and click Connect again — you’ll get the Allow screen and be redirected back with a live connection.', 'aqm-ghl' ); ?></li>
-							</ol>
-							<p style="margin: 0;">
-								<?php esc_html_e( 'Still stuck? Make sure this exact redirect URL is allowed in the GHL Marketplace app settings:', 'aqm-ghl' ); ?>
-								<br>
-								<code style="font-size: 11px; word-break: break-all;"><?php echo esc_html( $redirect_uri ); ?></code>
-							</p>
-						</div>
-					</details>
-				<?php endif; ?>
+				<details style="margin: 12px 0 0; border-top: 1px solid #f0f0f1; padding-top: 10px;">
+					<summary style="cursor: pointer; font-size: 12px; font-weight: 600; color: #2271b1;">
+						<?php esc_html_e( 'Where do I find the token and Location ID?', 'aqm-ghl' ); ?>
+					</summary>
+					<div style="font-size: 12px; color: #50575e; margin-top: 8px; line-height: 1.6;">
+						<p style="margin: 0 0 6px;"><strong><?php esc_html_e( 'Private Integration Token', 'aqm-ghl' ); ?></strong></p>
+						<ol style="margin: 0 0 10px 18px;">
+							<li><?php esc_html_e( 'In GoHighLevel, switch into the target sub-account.', 'aqm-ghl' ); ?></li>
+							<li><?php esc_html_e( 'Settings → Private Integrations → Create new integration.', 'aqm-ghl' ); ?></li>
+							<li><?php esc_html_e( 'Give it the scopes: View/Edit Contacts, View/Edit Opportunities, and View/Edit Custom Fields. Create it.', 'aqm-ghl' ); ?></li>
+							<li><?php esc_html_e( 'Copy the token GHL shows you (it\'s only shown once) and paste it above.', 'aqm-ghl' ); ?></li>
+						</ol>
+						<p style="margin: 0 0 6px;"><strong><?php esc_html_e( 'Location ID', 'aqm-ghl' ); ?></strong></p>
+						<p style="margin: 0;"><?php esc_html_e( 'In the same sub-account: Settings → Business Profile. The Location ID is shown there (it\'s also the long ID in the GHL URL after /location/).', 'aqm-ghl' ); ?></p>
+					</div>
+				</details>
 			</div>
 
+			<!-- FALLBACK: marketplace OAuth, collapsed. Kept for sites already on it. -->
 			<?php
-			// "Legacy PIT mode" notice — only relevant for true legacy sites that
-			// have a PIT token saved AND haven't started the OAuth migration yet.
-			// Once the OAuth secret is saved, the user is mid-migration and the
-			// Connect button above is the obvious next step; re-nagging about PIT
-			// just adds noise.
-			$pit_token = isset( $settings['private_token'] ) && '' !== (string) $settings['private_token']
-				? (string) $settings['private_token']
-				: ( ! empty( $settings['locations'][0]['private_token'] ) ? (string) $settings['locations'][0]['private_token'] : '' );
+			$saved_secret = isset( $settings['oauth_client_secret'] ) ? (string) $settings['oauth_client_secret'] : '';
+			$has_secret   = '' !== $saved_secret;
+			$secret_hint  = $has_secret ? ( str_repeat( '•', 8 ) . substr( $saved_secret, -4 ) . ' (saved)' ) : '';
+			$redirect_uri = class_exists( 'AQM_GHL_OAuth' ) ? AQM_GHL_OAuth::get_redirect_uri() : admin_url( 'admin-ajax.php?action=aqm_oauth_callback' );
 			?>
-			<?php if ( 'pit' === $active_mode && '' !== $pit_token && ! $has_secret ) : ?>
-				<div style="margin: 1em 0; padding: 8px 12px; background: #fffbeb; border-left: 3px solid #d39e00; font-size: 12px;">
-					<strong><?php esc_html_e( 'Currently using legacy Private Integration Token mode.', 'aqm-ghl' ); ?></strong>
-					<?php esc_html_e( 'It still works — but switching to OAuth above is recommended.', 'aqm-ghl' ); ?>
+			<details style="margin: 1em 0;">
+				<summary style="cursor: pointer; font-size: 12px; color: #646970;">
+					<?php esc_html_e( 'Advanced: connect with Marketplace OAuth instead', 'aqm-ghl' ); ?>
+				</summary>
+				<div style="border: 1px solid #dcdcde; background: #fff; padding: 12px 16px; margin-top: 8px;">
+					<p style="margin: 0 0 10px; font-size: 12px; color: #50575e;">
+						<?php esc_html_e( 'OAuth can fail if GHL already lists the app as installed on the sub-account (it won\'t re-issue a code and never redirects back). Use the Private Integration Token above unless you specifically need OAuth.', 'aqm-ghl' ); ?>
+					</p>
+					<div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+						<form method="post" action="options.php" style="display: flex; align-items: center; gap: 6px; margin: 0; flex-wrap: wrap;">
+							<?php settings_fields( 'aqm_ghl_connector' ); ?>
+							<label for="aqm-ghl-oauth-secret" style="font-size: 12px; font-weight: 600;"><?php esc_html_e( 'Client Secret', 'aqm-ghl' ); ?></label>
+							<input
+								type="password"
+								id="aqm-ghl-oauth-secret"
+								name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[oauth_client_secret]"
+								value=""
+								placeholder="<?php echo $has_secret ? esc_attr( $secret_hint ) : esc_attr__( 'Paste secret', 'aqm-ghl' ); ?>"
+								style="width: 200px;"
+								autocomplete="new-password"
+							/>
+							<button type="submit" class="button button-secondary"><?php esc_html_e( 'Save', 'aqm-ghl' ); ?></button>
+						</form>
+						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin: 0;">
+							<input type="hidden" name="action" value="aqm_oauth_start" />
+							<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
+							<button type="submit" class="button" <?php disabled( ! $has_secret ); ?>>
+								<?php esc_html_e( 'Connect via OAuth →', 'aqm-ghl' ); ?>
+							</button>
+						</form>
+					</div>
+					<p style="margin: 10px 0 0; font-size: 11px; color: #646970;">
+						<?php esc_html_e( 'Registered redirect URL (must be allowlisted in the GHL Marketplace app):', 'aqm-ghl' ); ?>
+						<br><code style="font-size: 11px; word-break: break-all;"><?php echo esc_html( $redirect_uri ); ?></code>
+					</p>
 				</div>
-			<?php endif; ?>
+			</details>
 		<?php endif; ?>
 		<?php
+	}
+
+	/**
+	 * Handle the "Connect" submit from the Private Integration Token card.
+	 * Validates the token against GHL before saving so we never store a
+	 * credential that doesn't work — then persists it as the active PIT auth.
+	 */
+	public function handle_pit_connect() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( 'Unauthorized', 403 );
+		}
+		check_admin_referer( 'aqm_ghl_pit_connect' );
+
+		$settings = get_option( AQM_GHL_OPTION_KEY, array() );
+		$settings = is_array( $settings ) ? $settings : array();
+
+		$incoming_token = isset( $_POST['aqm_pit_token'] ) ? trim( wp_strip_all_tags( (string) wp_unslash( $_POST['aqm_pit_token'] ) ) ) : '';
+		$location_id    = isset( $_POST['aqm_pit_location_id'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['aqm_pit_location_id'] ) ) ) : '';
+
+		// Blank token field = keep the existing saved token (so the user can
+		// edit just the Location ID without re-pasting the secret).
+		$existing_token = isset( $settings['private_token'] ) && '' !== (string) $settings['private_token']
+			? (string) $settings['private_token']
+			: ( ! empty( $settings['locations'][0]['private_token'] ) ? (string) $settings['locations'][0]['private_token'] : '' );
+		$token = '' !== $incoming_token ? $incoming_token : $existing_token;
+
+		if ( '' === $token || '' === $location_id ) {
+			$this->redirect_pit( 'error', __( 'Both a Private Integration Token and a Location ID are required.', 'aqm-ghl' ) );
+		}
+
+		// Validate against GHL before saving. A 401 means the token itself is
+		// bad; anything else (200/403/404/422) means the token authenticated,
+		// so we accept it (scope/endpoint quirks shouldn't block a valid token).
+		$location_name = '';
+		$validation    = $this->validate_pit_token( $token, $location_id, $location_name );
+		if ( is_wp_error( $validation ) ) {
+			$this->redirect_pit( 'error', $validation->get_error_message() );
+		}
+
+		// Persist as the active PIT connection. Mirror into locations[0] so all
+		// code paths (incl. multi-location fallbacks) see the same credentials,
+		// and pin auth_mode=pit so the auto-detector can't pick a stale OAuth
+		// token instead.
+		$settings['private_token'] = $token;
+		$settings['location_id']   = $location_id;
+		$settings['auth_mode']     = 'pit';
+
+		if ( ! isset( $settings['locations'] ) || ! is_array( $settings['locations'] ) ) {
+			$settings['locations'] = array();
+		}
+		$loc0 = isset( $settings['locations'][0] ) && is_array( $settings['locations'][0] ) ? $settings['locations'][0] : array();
+		$loc0['location_id']   = $location_id;
+		$loc0['private_token'] = $token;
+		if ( '' !== $location_name ) {
+			$loc0['name'] = $location_name;
+		} elseif ( empty( $loc0['name'] ) ) {
+			$loc0['name'] = '';
+		}
+		$settings['locations'][0] = $loc0;
+
+		update_option( AQM_GHL_OPTION_KEY, $settings, false );
+		wp_cache_delete( AQM_GHL_OPTION_KEY, 'options' );
+		wp_cache_delete( 'alloptions', 'options' );
+
+		$this->redirect_pit( 'connected' );
+	}
+
+	/**
+	 * Handle the "Disconnect" submit on a PIT connection. Clears the PIT auth
+	 * but leaves any OAuth credentials untouched.
+	 */
+	public function handle_pit_disconnect() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( 'Unauthorized', 403 );
+		}
+		check_admin_referer( 'aqm_ghl_pit_disconnect' );
+
+		$settings = get_option( AQM_GHL_OPTION_KEY, array() );
+		$settings = is_array( $settings ) ? $settings : array();
+
+		$settings['private_token'] = '';
+		$settings['location_id']   = '';
+		unset( $settings['auth_mode'] );
+		if ( ! empty( $settings['locations'][0] ) && is_array( $settings['locations'][0] ) ) {
+			$settings['locations'][0]['private_token'] = '';
+		}
+
+		update_option( AQM_GHL_OPTION_KEY, $settings, false );
+		wp_cache_delete( AQM_GHL_OPTION_KEY, 'options' );
+		wp_cache_delete( 'alloptions', 'options' );
+
+		$this->redirect_pit( 'disconnected' );
+	}
+
+	/**
+	 * Validate a Private Integration Token by calling GHL with it. Treats an
+	 * HTTP 401 as a definitively bad token; any authenticated response (even
+	 * 403/404 from scope/visibility quirks) is accepted. Backfills the location
+	 * display name into $location_name by reference when GHL returns it.
+	 *
+	 * @param string $token         The PIT to validate.
+	 * @param string $location_id   Target sub-account ID.
+	 * @param string $location_name (by ref) Filled with the location name if available.
+	 * @return true|\WP_Error
+	 */
+	private function validate_pit_token( $token, $location_id, &$location_name ) {
+		$response = wp_remote_get(
+			'https://services.leadconnectorhq.com/locations/' . rawurlencode( $location_id ),
+			array(
+				'timeout' => 15,
+				'headers' => array(
+					'Authorization' => 'Bearer ' . $token,
+					'Version'       => '2021-07-28',
+					'Accept'        => 'application/json',
+				),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return new \WP_Error( 'pit_network', sprintf(
+				/* translators: %s: network error */
+				__( 'Could not reach GoHighLevel: %s', 'aqm-ghl' ),
+				$response->get_error_message()
+			) );
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( 401 === $code ) {
+			return new \WP_Error( 'pit_unauthorized', __( 'GoHighLevel rejected the token (401). Double-check you copied the full Private Integration Token.', 'aqm-ghl' ) );
+		}
+
+		// Pull the friendly location name when the validate call returned it.
+		if ( is_array( $body ) ) {
+			if ( isset( $body['location']['name'] ) ) {
+				$location_name = sanitize_text_field( (string) $body['location']['name'] );
+			} elseif ( isset( $body['name'] ) ) {
+				$location_name = sanitize_text_field( (string) $body['name'] );
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Redirect back to the settings page after a PIT connect/disconnect, with
+	 * a status (and optional message) the renderer surfaces as a notice.
+	 *
+	 * @param string $status One of: connected, disconnected, error.
+	 * @param string $msg    Optional human-readable detail.
+	 */
+	private function redirect_pit( $status, $msg = '' ) {
+		$args = array(
+			'page'           => 'aqm-ghl-connector',
+			'aqm_pit_status' => $status,
+		);
+		if ( '' !== $msg ) {
+			$args['aqm_pit_msg'] = rawurlencode( mb_substr( $msg, 0, 240 ) );
+		}
+		wp_safe_redirect( add_query_arg( $args, admin_url( 'admin.php' ) ) );
+		exit;
 	}
 
 	/**

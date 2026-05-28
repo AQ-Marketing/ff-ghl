@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: AQM GHL Formidable Connector
- * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts. Supports two auth modes: legacy Private Integration Token (per sub-account) or OAuth via the AQM Marketplace App (per-install Connect button, tokens auto-refresh forever).
- * Version:     2.5.1
+ * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts. Primary auth is a per-sub-account Private Integration Token (paste token + Location ID, Connect). Marketplace OAuth is available as a fallback.
+ * Version:     2.6.0
  * Author: AQMarketing
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'AQM_GHL_CONNECTOR_VERSION', '2.5.1' );
+define( 'AQM_GHL_CONNECTOR_VERSION', '2.6.0' );
 define( 'AQM_GHL_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AQM_GHL_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 define( 'AQM_GHL_OPTION_KEY', 'aqm_ghl_connector_settings' );
