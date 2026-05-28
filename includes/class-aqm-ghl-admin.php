@@ -586,6 +586,38 @@ class AQM_GHL_Admin {
 						<?php esc_html_e( 'Same secret for every client install — ask Justin / your AQM contact if you don\'t have it.', 'aqm-ghl' ); ?>
 					</p>
 				<?php endif; ?>
+
+				<?php if ( $has_secret ) : ?>
+					<?php
+					// Recovery hint for the #1 stuck state: the user clicks Connect, lands
+					// on GHL's chooser, sees every sub-account already marked "installed",
+					// and is never redirected back — so this page just keeps showing
+					// "Connect →" with no explanation. GHL treats an already-installed
+					// app as a no-op instead of re-issuing an authorization code.
+					$redirect_uri = class_exists( 'AQM_GHL_OAuth' ) ? AQM_GHL_OAuth::get_redirect_uri() : admin_url( 'admin-ajax.php?action=aqm_oauth_callback' );
+					?>
+					<details style="margin: 10px 0 0; border-top: 1px solid #f0f0f1; padding-top: 10px;">
+						<summary style="cursor: pointer; font-size: 12px; font-weight: 600; color: #2271b1;">
+							<?php esc_html_e( 'Clicked Connect but GHL says every sub-account is “already connected” and never sent you back?', 'aqm-ghl' ); ?>
+						</summary>
+						<div style="font-size: 12px; color: #50575e; margin-top: 8px; line-height: 1.6;">
+							<p style="margin: 0 0 8px;">
+								<?php esc_html_e( 'GoHighLevel won’t re-issue authorization when the app is already installed on a sub-account — so it never redirects back here. Re-authorize the one sub-account this site should target:', 'aqm-ghl' ); ?>
+							</p>
+							<ol style="margin: 0 0 8px 18px;">
+								<li><?php esc_html_e( 'In GoHighLevel, switch into the target sub-account.', 'aqm-ghl' ); ?></li>
+								<li><?php esc_html_e( 'Go to Settings → Integrations → My Apps (or Marketplace → Installed Apps).', 'aqm-ghl' ); ?></li>
+								<li><?php esc_html_e( 'Find the AQM GHL Connector app and click Uninstall.', 'aqm-ghl' ); ?></li>
+								<li><?php esc_html_e( 'Come back here and click Connect again — you’ll get the Allow screen and be redirected back with a live connection.', 'aqm-ghl' ); ?></li>
+							</ol>
+							<p style="margin: 0;">
+								<?php esc_html_e( 'Still stuck? Make sure this exact redirect URL is allowed in the GHL Marketplace app settings:', 'aqm-ghl' ); ?>
+								<br>
+								<code style="font-size: 11px; word-break: break-all;"><?php echo esc_html( $redirect_uri ); ?></code>
+							</p>
+						</div>
+					</details>
+				<?php endif; ?>
 			</div>
 
 			<?php
