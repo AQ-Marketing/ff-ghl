@@ -274,8 +274,36 @@ class AQM_GHL_OAuth {
 
 		update_option( AQM_GHL_OPTION_KEY, $settings, false );
 
+		// Some hosts run a persistent object cache that doesn't always reflect an
+		// update_option() write on the *next* request (the helpers.php notes call
+		// out Pressable + filtered get_option specifically). When that happens the
+		// settings page reads stale, token-less settings right after a successful
+		// Connect — which is exactly the "✓ Connected" notice + "Not connected"
+		// eyebrow contradiction. Bust the option caches so the redirect target
+		// reads the just-written values.
+		wp_cache_delete( AQM_GHL_OPTION_KEY, 'options' );
+		wp_cache_delete( 'alloptions', 'options' );
+
 		// Fresh tokens — any prior "is this connected?" verdict is now stale.
 		self::invalidate_verification_cache();
+
+		// Forced diagnostic (writes to wp-content/aqm-ghl-diag.log regardless of
+		// the debug-logging toggle) so we can confirm what the token endpoint
+		// returned and that the write actually stuck — without ever logging the
+		// secret values themselves.
+		if ( function_exists( 'aqm_ghl_diag_log' ) ) {
+			$verify = get_option( AQM_GHL_OPTION_KEY, array() );
+			$verify = is_array( $verify ) ? $verify : array();
+			aqm_ghl_diag_log( sprintf(
+				'store_tokens: response had access_token=%s refresh_token=%s expires_in=%s locationId=%s | after-write access_token=%s refresh_token=%s',
+				! empty( $token_response['access_token'] ) ? 'yes' : 'NO',
+				! empty( $token_response['refresh_token'] ) ? 'yes' : 'NO',
+				isset( $token_response['expires_in'] ) ? (int) $token_response['expires_in'] : 'absent',
+				! empty( $token_response['locationId'] ) ? 'yes' : 'NO',
+				! empty( $verify['oauth_access_token'] ) ? 'yes' : 'NO',
+				! empty( $verify['oauth_refresh_token'] ) ? 'yes' : 'NO'
+			) );
+		}
 	}
 
 	/**
@@ -412,7 +440,14 @@ class AQM_GHL_OAuth {
 	 */
 	public static function is_connected() {
 		$settings = aqm_ghl_get_settings();
-		return ! empty( $settings['oauth_access_token'] ) && ! empty( $settings['oauth_refresh_token'] );
+		// Presence of an access_token means OAuth completed and we can talk to
+		// GHL right now. We deliberately do NOT also require a refresh_token:
+		// some GHL token responses (depending on app/scope config) don't return
+		// one, and its absence was making the UI claim "Not connected" the
+		// instant after a successful Connect — directly contradicting the
+		// "Connected" success notice. A missing refresh_token only affects
+		// long-term auto-refresh (surfaced separately by is_truly_connected()).
+		return ! empty( $settings['oauth_access_token'] );
 	}
 
 	/**
