@@ -315,9 +315,6 @@ class AQM_GHL_Admin {
 										boxes.forEach(function(b){
 											if ( b.checked !== master.checked ) {
 												b.checked = master.checked;
-												// Trigger the existing change handler so the per-form mapping
-												// blocks add/remove correctly.
-												b.dispatchEvent(new Event('change', { bubbles: true }));
 											}
 										});
 										master.indeterminate = false;
