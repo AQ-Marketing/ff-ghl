@@ -215,17 +215,14 @@ class AQM_GHL_Admin {
 			$has_auth        = $oauth_connected || $pit_configured;
 			$has_forms       = ! empty( $settings['form_ids'] );
 			?>
-			<?php if ( ! $has_auth || ! $has_forms ) : ?>
+			<?php // Only nag about forms here — the "Connect to GoHighLevel" card below
+			// is already a loud CTA when auth isn't set up, so a redundant yellow
+			// banner above it is just noise. ?>
+			<?php if ( $has_auth && ! $has_forms ) : ?>
 				<div class="notice notice-warning">
 					<p>
 						<strong><?php esc_html_e( 'Setup needed:', 'aqm-ghl' ); ?></strong>
-						<?php if ( ! $has_auth && ! $has_forms ) : ?>
-							<?php esc_html_e( 'Connect to GoHighLevel below and select at least one Formidable form to start sending submissions.', 'aqm-ghl' ); ?>
-						<?php elseif ( ! $has_auth ) : ?>
-							<?php esc_html_e( 'Connect to GoHighLevel below to enable form submissions.', 'aqm-ghl' ); ?>
-						<?php else : ?>
-							<?php esc_html_e( 'Select at least one Formidable form below to send submissions to GoHighLevel.', 'aqm-ghl' ); ?>
-						<?php endif; ?>
+						<?php esc_html_e( 'Select at least one Formidable form below to send submissions to GoHighLevel.', 'aqm-ghl' ); ?>
 					</p>
 				</div>
 			<?php endif; ?>
@@ -521,69 +518,66 @@ class AQM_GHL_Admin {
 				</div>
 			</div>
 		<?php else : ?>
-			<!-- CONNECT SETUP FORM -->
-			<div style="margin: 1em 0; border: 2px solid #2271b1; background: #fff; padding: 18px 22px;">
-				<h2 style="margin: 0 0 8px;"><?php esc_html_e( 'Connect to GoHighLevel', 'aqm-ghl' ); ?></h2>
-				<p style="margin: 0 0 14px; color: #50575e;">
-					<?php esc_html_e( 'Click Connect below, sign in to GoHighLevel, and pick which sub-account this WordPress site should send form submissions to.', 'aqm-ghl' ); ?>
-				</p>
-
-				<?php
-				// Show the last 4 chars of the saved secret so the user can verify
-				// which value is active without exposing the full secret in the DOM.
-				$saved_secret  = isset( $settings['oauth_client_secret'] ) ? (string) $settings['oauth_client_secret'] : '';
-				$secret_hint   = '';
-				if ( '' !== $saved_secret ) {
-					$tail        = substr( $saved_secret, -4 );
-					$secret_hint = str_repeat( '•', 12 ) . $tail . ' (saved)';
-				}
-				?>
-				<form method="post" action="options.php" style="margin: 0 0 14px;">
-					<?php settings_fields( 'aqm_ghl_connector' ); ?>
-					<p style="margin: 0 0 8px;">
-						<label style="font-weight: 600; display: block; margin-bottom: 4px;"><?php esc_html_e( 'AQM Client Secret', 'aqm-ghl' ); ?></label>
-						<input type="password" name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[oauth_client_secret]" value="" placeholder="<?php echo $secret_hint ? esc_attr( $secret_hint ) : esc_attr__( 'Paste the secret provided by AQM', 'aqm-ghl' ); ?>" class="regular-text" style="width: 100%; max-width: 460px;" autocomplete="new-password" />
-						<span class="description" style="display: block; font-size: 12px; margin-top: 4px;">
-							<?php if ( $secret_hint ) : ?>
-								<?php
-								/* translators: %s: last 4 characters of the saved secret */
-								printf( esc_html__( 'Saved secret ends in %s. Leave blank to keep it, or paste a new value to replace.', 'aqm-ghl' ), '<code>' . esc_html( $tail ) . '</code>' );
-								?>
-							<?php else : ?>
-								<?php esc_html_e( 'Same value for every client install. Ask Justin / your AQM contact if you don\'t have it.', 'aqm-ghl' ); ?>
-							<?php endif; ?>
+			<?php
+			// Show the last 4 chars of the saved secret so the user can verify
+			// which value is active without exposing the full secret in the DOM.
+			$saved_secret = isset( $settings['oauth_client_secret'] ) ? (string) $settings['oauth_client_secret'] : '';
+			$has_secret   = '' !== $saved_secret;
+			$tail         = $has_secret ? substr( $saved_secret, -4 ) : '';
+			$secret_hint  = $has_secret ? str_repeat( '•', 8 ) . $tail . ' (saved)' : '';
+			?>
+			<!-- COMPACT CONNECT SETUP CARD -->
+			<div style="margin: 1em 0; border: 1px solid #2271b1; background: #fff; padding: 12px 16px;">
+				<div style="display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap;">
+					<div style="flex: 1; min-width: 260px;">
+						<strong style="font-size: 14px; display: block; margin-bottom: 2px;"><?php esc_html_e( 'Connect to GoHighLevel', 'aqm-ghl' ); ?></strong>
+						<span style="color: #50575e; font-size: 12px;">
+							<?php esc_html_e( 'Save the AQM Client Secret, then click Connect to pick the sub-account.', 'aqm-ghl' ); ?>
 						</span>
-					</p>
-					<p style="margin: 0;">
-						<button type="submit" class="button button-secondary"><?php esc_html_e( 'Save Secret', 'aqm-ghl' ); ?></button>
-					</p>
-				</form>
+					</div>
 
-				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin: 0; border-top: 1px solid #f0f0f1; padding-top: 14px;">
-					<input type="hidden" name="action" value="aqm_oauth_start" />
-					<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
-					<button type="submit" class="button button-primary button-hero" <?php disabled( empty( $settings['oauth_client_secret'] ) ); ?>>
-						<?php esc_html_e( 'Connect to GoHighLevel →', 'aqm-ghl' ); ?>
-					</button>
-					<?php if ( empty( $settings['oauth_client_secret'] ) ) : ?>
-						<span class="description" style="display: block; margin-top: 6px;">
-							<?php esc_html_e( 'Save the AQM Client Secret above first.', 'aqm-ghl' ); ?>
-						</span>
-					<?php endif; ?>
-				</form>
+					<form method="post" action="options.php" style="display: flex; align-items: center; gap: 6px; margin: 0; flex-wrap: wrap;">
+						<?php settings_fields( 'aqm_ghl_connector' ); ?>
+						<label for="aqm-ghl-oauth-secret" style="font-size: 12px; font-weight: 600;"><?php esc_html_e( 'Client Secret', 'aqm-ghl' ); ?></label>
+						<input
+							type="password"
+							id="aqm-ghl-oauth-secret"
+							name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[oauth_client_secret]"
+							value=""
+							placeholder="<?php echo $has_secret ? esc_attr( $secret_hint ) : esc_attr__( 'Paste secret', 'aqm-ghl' ); ?>"
+							style="width: 200px;"
+							autocomplete="new-password"
+						/>
+						<button type="submit" class="button button-secondary"><?php esc_html_e( 'Save', 'aqm-ghl' ); ?></button>
+					</form>
+
+					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin: 0;">
+						<input type="hidden" name="action" value="aqm_oauth_start" />
+						<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
+						<button type="submit" class="button button-primary" <?php disabled( ! $has_secret ); ?>>
+							<?php esc_html_e( 'Connect →', 'aqm-ghl' ); ?>
+						</button>
+					</form>
+				</div>
+				<?php if ( ! $has_secret ) : ?>
+					<p style="margin: 8px 0 0; font-size: 12px; color: #646970;">
+						<?php esc_html_e( 'Same secret for every client install — ask Justin / your AQM contact if you don\'t have it.', 'aqm-ghl' ); ?>
+					</p>
+				<?php endif; ?>
 			</div>
 
 			<?php
-			// Only call out "legacy PIT mode" when a PIT token is actually saved
-			// (a real legacy site). Otherwise the auth detector just defaults to
-			// "pit" with nothing configured, and the "Connect" prompt above is the
-			// correct guidance — claiming PIT "still works" would be misleading.
+			// "Legacy PIT mode" notice — only relevant for true legacy sites that
+			// have a PIT token saved AND haven't started the OAuth migration yet.
+			// Once the OAuth secret is saved, the user is mid-migration and the
+			// Connect button above is the obvious next step; re-nagging about PIT
+			// just adds noise.
 			$pit_token = isset( $settings['private_token'] ) && '' !== (string) $settings['private_token']
 				? (string) $settings['private_token']
 				: ( ! empty( $settings['locations'][0]['private_token'] ) ? (string) $settings['locations'][0]['private_token'] : '' );
 			?>
-			<?php if ( 'pit' === $active_mode && '' !== $pit_token ) : ?>
-				<div style="margin: 1em 0; padding: 10px 14px; background: #fffbeb; border-left: 3px solid #d39e00; font-size: 13px;">
+			<?php if ( 'pit' === $active_mode && '' !== $pit_token && ! $has_secret ) : ?>
+				<div style="margin: 1em 0; padding: 8px 12px; background: #fffbeb; border-left: 3px solid #d39e00; font-size: 12px;">
 					<strong><?php esc_html_e( 'Currently using legacy Private Integration Token mode.', 'aqm-ghl' ); ?></strong>
 					<?php esc_html_e( 'It still works — but switching to OAuth above is recommended.', 'aqm-ghl' ); ?>
 				</div>
