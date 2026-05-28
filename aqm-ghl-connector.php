@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: AQM GHL Formidable Connector
- * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts. Primary auth is a per-sub-account Private Integration Token (paste token + Location ID, Connect). Marketplace OAuth is available as a fallback.
- * Version:     2.6.0
+ * Description: Sends Formidable Forms submissions to GoHighLevel (LeadConnector) as Contacts. One-click Connect via the AQM Marketplace App (OAuth), routed through a central redirect broker so a single app serves every client site. Tokens auto-refresh.
+ * Version:     2.7.0
  * Author: AQMarketing
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'AQM_GHL_CONNECTOR_VERSION', '2.6.0' );
+define( 'AQM_GHL_CONNECTOR_VERSION', '2.7.0' );
 define( 'AQM_GHL_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AQM_GHL_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 define( 'AQM_GHL_OPTION_KEY', 'aqm_ghl_connector_settings' );
@@ -24,6 +24,15 @@ define( 'AQM_GHL_OAUTH_AUTHORIZE_URL', 'https://marketplace.gohighlevel.com/v2/o
 define( 'AQM_GHL_OAUTH_TOKEN_URL',     'https://services.leadconnectorhq.com/oauth/token' );
 define( 'AQM_GHL_OAUTH_SCOPES',        'contacts.readonly contacts.write workflows.readonly locations/customFields.readonly locations/customFields.write opportunities.readonly opportunities.write' );
 define( 'AQM_GHL_OAUTH_CALLBACK_ACTION', 'aqm_oauth_callback' ); // No 'ghl' in name per GHL whitelabel rule.
+
+// Central OAuth redirect broker. A GHL marketplace app has a fixed set of
+// registered redirect URIs, but this plugin runs on many client domains — so
+// we cannot register a per-site redirect_uri. Instead, every install points
+// GHL at this single broker, which forwards the auth code back to whichever
+// site started the flow (the site's own callback URL travels in the signed
+// OAuth `state`). This is the ONE URL that must be registered as a redirect
+// URI in the GHL Marketplace app. Source: Apps/ghl-oauth-broker (Cloudflare Worker).
+define( 'AQM_GHL_OAUTH_REDIRECT_URI', 'https://aqm-ghl-oauth.robert-ff9.workers.dev/callback' );
 
 // DIAGNOSTIC: capture fatal + memory usage at each WP boot phase on settings page.
 // Gated behind WP_DEBUG so it never writes a log file (or responds to the page

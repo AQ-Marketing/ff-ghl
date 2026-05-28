@@ -36,13 +36,67 @@ class AQM_GHL_OAuth {
 	}
 
 	/**
-	 * Compute this WP site's OAuth redirect URI. Must match exactly one of
-	 * the URIs registered in GHL's developer dashboard for the AQM app.
+	 * The redirect URI sent to GHL in BOTH the authorize request and the token
+	 * exchange (OAuth requires them to match). This is the central broker — the
+	 * single URL registered in the GHL Marketplace app — NOT this site's own
+	 * domain. The broker forwards the code back to this site's callback (URL
+	 * carried in the signed `state`). See AQM_GHL_OAUTH_REDIRECT_URI.
 	 *
 	 * @return string
 	 */
 	public static function get_redirect_uri() {
+		return AQM_GHL_OAUTH_REDIRECT_URI;
+	}
+
+	/**
+	 * This specific site's callback endpoint. GHL never redirects here directly
+	 * (its registered redirect is the broker); the broker forwards here after
+	 * verifying the signed state. Travels inside the OAuth `state` payload.
+	 *
+	 * @return string
+	 */
+	public static function get_site_callback_uri() {
 		return admin_url( 'admin-ajax.php?action=' . AQM_GHL_OAUTH_CALLBACK_ACTION );
+	}
+
+	/**
+	 * URL-safe base64 (no padding) — matches the broker's encoding so HMAC
+	 * signatures and payloads round-trip identically on both sides.
+	 *
+	 * @param string $raw Raw bytes.
+	 * @return string
+	 */
+	private static function b64url_encode( $raw ) {
+		return rtrim( strtr( base64_encode( $raw ), '+/', '-_' ), '=' );
+	}
+
+	/**
+	 * Inverse of b64url_encode().
+	 *
+	 * @param string $s Encoded string.
+	 * @return string Raw bytes ('' on failure).
+	 */
+	private static function b64url_decode( $s ) {
+		$s   = strtr( $s, '-_', '+/' );
+		$pad = strlen( $s ) % 4;
+		if ( $pad ) {
+			$s .= str_repeat( '=', 4 - $pad );
+		}
+		$decoded = base64_decode( $s, true );
+		return false === $decoded ? '' : $decoded;
+	}
+
+	/**
+	 * HMAC-SHA256 of the payload using the shared client_secret, base64url'd.
+	 * The broker recomputes this to prove the state wasn't tampered with, so it
+	 * can't be abused as an open redirector.
+	 *
+	 * @param string $payload_b64   The base64url JSON payload.
+	 * @param string $client_secret Shared marketplace app secret.
+	 * @return string
+	 */
+	private static function sign_state( $payload_b64, $client_secret ) {
+		return self::b64url_encode( hash_hmac( 'sha256', $payload_b64, $client_secret, true ) );
 	}
 
 	/**
@@ -106,8 +160,18 @@ class AQM_GHL_OAuth {
 			exit;
 		}
 
-		$state = wp_generate_password( 32, false );
-		set_transient( 'aqm_oauth_state_' . $state, get_current_user_id(), 10 * MINUTE_IN_SECONDS );
+		// Build a signed state that carries THIS site's callback URL so the
+		// broker knows where to forward the code. The nonce is the CSRF token:
+		// we stash it in a short-lived transient and re-check it on callback.
+		$nonce = wp_generate_password( 20, false );
+		set_transient( 'aqm_oauth_state_' . $nonce, get_current_user_id(), 10 * MINUTE_IN_SECONDS );
+
+		$payload_b64 = self::b64url_encode( wp_json_encode( array(
+			's' => self::get_site_callback_uri(),
+			'n' => $nonce,
+			't' => time(),
+		) ) );
+		$state = $payload_b64 . '.' . self::sign_state( $payload_b64, $client_secret );
 
 		wp_redirect( self::build_authorize_url( $state ) );
 		exit;
@@ -138,9 +202,43 @@ class AQM_GHL_OAuth {
 			return;
 		}
 
-		$transient_key = 'aqm_oauth_state_' . $state;
+		// State arrives as "payload.signature" (forwarded verbatim by the broker).
+		$dot = strrpos( $state, '.' );
+		if ( false === $dot || $dot < 1 || $dot >= strlen( $state ) - 1 ) {
+			$this->redirect_to_settings( 'state_mismatch', 'Malformed state. Try Connect again.' );
+			return;
+		}
+		$payload_b64 = substr( $state, 0, $dot );
+		$signature   = substr( $state, $dot + 1 );
+
+		$settings      = aqm_ghl_get_settings();
+		$client_secret = isset( $settings['oauth_client_secret'] ) ? (string) $settings['oauth_client_secret'] : '';
+		if ( '' === trim( $client_secret ) ) {
+			$this->redirect_to_settings( 'missing_secret', 'Plugin lost the client_secret between Connect and callback. Re-enter and try again.' );
+			return;
+		}
+
+		// Re-verify the signature with our own copy of the client_secret (the
+		// broker already checked it; this defends against a compromised broker
+		// or a forged forward).
+		$expected = self::sign_state( $payload_b64, $client_secret );
+		if ( ! hash_equals( $expected, $signature ) ) {
+			$this->redirect_to_settings( 'state_mismatch', 'State signature did not verify. Try Connect again.' );
+			return;
+		}
+
+		$payload = json_decode( self::b64url_decode( $payload_b64 ), true );
+		$nonce   = is_array( $payload ) && isset( $payload['n'] ) ? (string) $payload['n'] : '';
+		if ( '' === $nonce ) {
+			$this->redirect_to_settings( 'state_mismatch', 'State missing nonce. Try Connect again.' );
+			return;
+		}
+
+		// One-time CSRF nonce: proves THIS site initiated the flow. An injected
+		// code for a site that never started a connection has no matching nonce.
+		$transient_key = 'aqm_oauth_state_' . $nonce;
 		$user_id       = get_transient( $transient_key );
-		delete_transient( $transient_key ); // One-time use.
+		delete_transient( $transient_key );
 
 		if ( ! $user_id ) {
 			$this->redirect_to_settings( 'state_mismatch', 'State token expired or invalid. Try Connect again.' );
@@ -150,13 +248,6 @@ class AQM_GHL_OAuth {
 		// Re-establish the admin session context for the redirect target.
 		if ( ! is_user_logged_in() ) {
 			wp_set_current_user( (int) $user_id );
-		}
-
-		$settings      = aqm_ghl_get_settings();
-		$client_secret = isset( $settings['oauth_client_secret'] ) ? (string) $settings['oauth_client_secret'] : '';
-		if ( '' === trim( $client_secret ) ) {
-			$this->redirect_to_settings( 'missing_secret', 'Plugin lost the client_secret between Connect and callback. Re-enter and try again.' );
-			return;
 		}
 
 		$result = $this->exchange_code_for_tokens( $code, $client_secret );
