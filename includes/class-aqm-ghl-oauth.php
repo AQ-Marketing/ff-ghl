@@ -53,16 +53,30 @@ class AQM_GHL_OAuth {
 	 * @return string
 	 */
 	public static function build_authorize_url( $state ) {
-		return add_query_arg(
-			array(
-				'response_type' => 'code',
-				'redirect_uri'  => self::get_redirect_uri(),
-				'client_id'     => AQM_GHL_OAUTH_CLIENT_ID,
-				'scope'         => AQM_GHL_OAUTH_SCOPES,
-				'state'         => $state,
-			),
-			AQM_GHL_OAUTH_AUTHORIZE_URL
+		// IMPORTANT: build the query string by hand with rawurlencode() on every
+		// value. We must NOT use add_query_arg() here — WordPress builds its query
+		// string with urlencoding disabled (build_query() passes $urlencode=false),
+		// so it would drop redirect_uri in raw. Because redirect_uri itself contains
+		// a nested query string (…/admin-ajax.php?action=aqm_oauth_callback), GHL
+		// then parses that inner "?action=…" as its OWN query parameter and
+		// truncates redirect_uri to "…/admin-ajax.php" — which breaks the chooser
+		// page load and the OAuth callback. rawurlencode() percent-encodes the
+		// nested "?" / "=" / "/" so the whole redirect_uri arrives intact, and
+		// encodes the space-delimited scope as %20 (OAuth-spec correct).
+		$params = array(
+			'response_type' => 'code',
+			'redirect_uri'  => self::get_redirect_uri(),
+			'client_id'     => AQM_GHL_OAUTH_CLIENT_ID,
+			'scope'         => AQM_GHL_OAUTH_SCOPES,
+			'state'         => $state,
 		);
+
+		$pairs = array();
+		foreach ( $params as $key => $value ) {
+			$pairs[] = rawurlencode( $key ) . '=' . rawurlencode( (string) $value );
+		}
+
+		return AQM_GHL_OAUTH_AUTHORIZE_URL . '?' . implode( '&', $pairs );
 	}
 
 	/**
