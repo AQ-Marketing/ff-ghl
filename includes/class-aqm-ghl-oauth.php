@@ -195,11 +195,30 @@ class AQM_GHL_OAuth {
 		$nonce = wp_generate_password( 20, false );
 		set_transient( 'aqm_oauth_state_' . $nonce, get_current_user_id(), 10 * MINUTE_IN_SECONDS );
 
-		$payload_b64 = self::b64url_encode( wp_json_encode( array(
+		$payload = array(
 			's' => self::get_site_callback_uri(),
 			'n' => $nonce,
 			't' => time(),
-		) ) );
+		);
+
+		// Optional "lock to this sub-account" guard. GHL's chooser has NO way to
+		// pre-select a location, so we can't auto-pick one — but we CAN refuse a
+		// wrong pick. The admin supplies the expected GHL locationId (via the
+		// ?aqm_expect_loc= URL param surfaced on the Connect form, or the
+		// Reconnect button which pins the currently-connected sub-account). We
+		// fold it into the SIGNED state so it can't be stripped or swapped
+		// mid-flight, then enforce it on callback once GHL tells us which
+		// sub-account was actually chosen. Empty = no lock (unchanged behaviour).
+		if ( isset( $_POST['aqm_expect_loc'] ) && is_string( $_POST['aqm_expect_loc'] ) ) {
+			// GHL locationIds are alphanumeric; allow _ and - too so a future
+			// nanoid-style ID can never be silently mangled into a false mismatch.
+			$expected_loc = substr( preg_replace( '/[^A-Za-z0-9_-]/', '', wp_unslash( $_POST['aqm_expect_loc'] ) ), 0, 64 );
+			if ( '' !== $expected_loc ) {
+				$payload['el'] = $expected_loc;
+			}
+		}
+
+		$payload_b64 = self::b64url_encode( wp_json_encode( $payload ) );
 		$state = $payload_b64 . '.' . self::sign_state( $payload_b64, $client_secret );
 
 		wp_redirect( self::build_authorize_url( $state ) );
@@ -258,6 +277,9 @@ class AQM_GHL_OAuth {
 
 		$payload = json_decode( self::b64url_decode( $payload_b64 ), true );
 		$nonce   = is_array( $payload ) && isset( $payload['n'] ) ? (string) $payload['n'] : '';
+		// Optional sub-account lock (see handle_start). Trustworthy because the
+		// whole payload is HMAC-verified above — a user can't edit 'el' in flight.
+		$expected_loc = is_array( $payload ) && isset( $payload['el'] ) ? (string) $payload['el'] : '';
 		if ( '' === $nonce ) {
 			$this->redirect_to_settings( 'state_mismatch', 'State missing nonce. Try Connect again.' );
 			return;
@@ -283,6 +305,31 @@ class AQM_GHL_OAuth {
 		if ( is_wp_error( $result ) ) {
 			$this->redirect_to_settings( 'token_exchange_failed', $result->get_error_message() );
 			return;
+		}
+
+		// Enforce the optional sub-account lock. GHL only reveals which
+		// sub-account was chosen in the token response, so this is the earliest
+		// we can reject a wrong pick — and we do it BEFORE store_tokens() so a
+		// mismatched install never clobbers an existing good connection. Fails
+		// closed: a missing/blank locationId counts as a mismatch.
+		if ( '' !== $expected_loc ) {
+			$actual_loc = isset( $result['locationId'] ) ? (string) $result['locationId'] : '';
+			if ( $expected_loc !== $actual_loc ) {
+				aqm_ghl_log(
+					'OAuth install rejected: chosen sub-account did not match the expected lock.',
+					array( 'expected' => $expected_loc, 'got' => '' !== $actual_loc ? $actual_loc : '(none)' )
+				);
+				$this->redirect_to_settings(
+					'wrong_location',
+					sprintf(
+						/* translators: 1: expected GHL locationId, 2: locationId actually installed */
+						'Expected sub-account %1$s but the install landed on %2$s. Nothing was saved — click Connect again and pick %1$s.',
+						$expected_loc,
+						'' !== $actual_loc ? $actual_loc : '(unknown)'
+					)
+				);
+				return;
+			}
 		}
 
 		$this->store_tokens( $result );

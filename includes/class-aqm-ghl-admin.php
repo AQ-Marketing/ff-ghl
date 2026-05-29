@@ -579,6 +579,14 @@ class AQM_GHL_Admin {
 		$msg     = isset( $_GET['aqm_oauth_message'] ) ? sanitize_text_field( wp_unslash( $_GET['aqm_oauth_message'] ) ) : '';
 		$err     = isset( $_GET['aqm_oauth_err'] )     ? sanitize_text_field( wp_unslash( $_GET['aqm_oauth_err'] ) )     : '';
 
+		// Optional sub-account lock, pre-filled from a ?aqm_expect_loc= URL param
+		// (e.g. a Connect link AQM hands a client) and carried into the Connect
+		// form below. Same alphanumeric-only sanitisation as AQM_GHL_OAuth::handle_start().
+		$expect_loc = '';
+		if ( isset( $_GET['aqm_expect_loc'] ) && is_string( $_GET['aqm_expect_loc'] ) ) {
+			$expect_loc = substr( preg_replace( '/[^A-Za-z0-9_-]/', '', wp_unslash( $_GET['aqm_expect_loc'] ) ), 0, 64 );
+		}
+
 		// Two different "connected" checks:
 		//   - has_tokens: passive — are OAuth tokens persisted at all?
 		//   - is_connected: active — do those tokens still work against GHL?
@@ -604,6 +612,13 @@ class AQM_GHL_Admin {
 		<?php elseif ( 'disconnected' === $status ) : ?>
 			<div class="notice notice-info is-dismissible"><p>
 				<?php esc_html_e( 'Disconnected from GoHighLevel. Reconnect below when you\'re ready.', 'aqm-ghl' ); ?>
+			</p></div>
+		<?php elseif ( 'wrong_location' === $status ) : ?>
+			<div class="notice notice-error is-dismissible"><p>
+				<strong><?php esc_html_e( 'Wrong sub-account — nothing was saved.', 'aqm-ghl' ); ?></strong>
+				<?php if ( '' !== $msg ) : ?>
+					<br><?php echo esc_html( $msg ); ?>
+				<?php endif; ?>
 			</p></div>
 		<?php elseif ( '' !== $status ) : ?>
 			<div class="notice notice-error is-dismissible"><p>
@@ -645,7 +660,10 @@ class AQM_GHL_Admin {
 						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block;">
 							<input type="hidden" name="action" value="aqm_oauth_start" />
 							<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
-							<button type="submit" class="button button-secondary"><?php esc_html_e( 'Reconnect', 'aqm-ghl' ); ?></button>
+							<?php if ( '' !== $location_id ) : ?>
+								<input type="hidden" name="aqm_expect_loc" value="<?php echo esc_attr( $location_id ); ?>" />
+							<?php endif; ?>
+							<button type="submit" class="button button-secondary" title="<?php esc_attr_e( 'Re-authorizes the SAME sub-account. To move this site to a different sub-account, Disconnect first, then Connect.', 'aqm-ghl' ); ?>"><?php esc_html_e( 'Reconnect', 'aqm-ghl' ); ?></button>
 						</form>
 						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block; margin-left: 4px;">
 							<input type="hidden" name="action" value="aqm_oauth_disconnect" />
@@ -707,6 +725,29 @@ class AQM_GHL_Admin {
 						<button type="submit" class="button button-primary" <?php disabled( ! $has_secret ); ?>>
 							<?php esc_html_e( 'Connect →', 'aqm-ghl' ); ?>
 						</button>
+						<details style="margin-top: 8px;" <?php echo '' !== $expect_loc ? 'open' : ''; ?>>
+							<summary style="cursor: pointer; font-size: 12px; font-weight: 600; color: #2271b1;">
+								<?php
+								echo '' !== $expect_loc
+									? esc_html__( '🔒 This install is locked to a specific sub-account', 'aqm-ghl' )
+									: esc_html__( 'Lock this install to a specific sub-account (optional)', 'aqm-ghl' );
+								?>
+							</summary>
+							<div style="font-size: 12px; color: #50575e; margin-top: 8px; line-height: 1.6;">
+								<p style="margin: 0 0 6px;">
+									<?php esc_html_e( 'GoHighLevel can’t pre-select a sub-account on its chooser, so this is a safety check: enter the target sub-account’s locationId (or open this page with ?aqm_expect_loc=THE_ID appended to the URL) and the install will be rejected unless you pick that exact sub-account — so the wrong account can never be connected by mistake. Leave blank for the normal flow.', 'aqm-ghl' ); ?>
+								</p>
+								<input
+									type="text"
+									name="aqm_expect_loc"
+									value="<?php echo esc_attr( $expect_loc ); ?>"
+									placeholder="<?php esc_attr_e( 'e.g. ve9EPM428h8vShlRW1KT', 'aqm-ghl' ); ?>"
+									style="width: 260px; font-family: monospace; font-size: 11px;"
+									autocomplete="off"
+									spellcheck="false"
+								/>
+							</div>
+						</details>
 					</form>
 				</div>
 				<?php if ( ! $has_secret ) : ?>
