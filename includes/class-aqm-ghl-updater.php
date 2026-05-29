@@ -139,9 +139,12 @@ class AQM_GHL_Updater {
 			return $transient;
 		}
 		
-		// Check if user is on plugins page - if so, force check to ensure latest version is shown
-		$screen = get_current_screen();
-		$is_plugins_page = ( $screen && $screen->id === 'plugins' ) || 
+		// Check if user is on plugins page - if so, force check to ensure latest version is shown.
+		// get_current_screen() is only defined in admin screen context — NOT during
+		// wp-cron or admin-ajax, where this filter (pre_set_site_transient_update_plugins)
+		// also fires. Calling it unguarded there throws a fatal that kills the request.
+		$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+		$is_plugins_page = ( $screen && $screen->id === 'plugins' ) ||
 		                   ( isset( $GLOBALS['pagenow'] ) && $GLOBALS['pagenow'] === 'plugins.php' );
 		
 		// If on plugins page, force check (bypass cache) to ensure latest version is shown

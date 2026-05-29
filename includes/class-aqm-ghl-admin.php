@@ -974,6 +974,32 @@ class AQM_GHL_Admin {
 		// Merge with existing so we never wipe keys (e.g. locations); ensures token update persists
 		$to_save = array_merge( $raw_existing, $sanitized );
 
+		// CRITICAL: register_setting() applies this sanitizer to EVERY update_option()
+		// for this option — including AQM_GHL_OAuth::store_tokens() persisting a
+		// freshly-exchanged access/refresh token from the OAuth callback. Those
+		// OAuth runtime keys are NOT part of the settings form, so $sanitized never
+		// contains them, and the array_merge above (which uses the PRE-write
+		// $raw_existing) would silently DROP a brand-new token — the exact reason a
+		// Connect could report "connected" yet never persist. Carry these keys
+		// through explicitly: prefer the incoming value ($input — a fresh token, or
+		// an intentional disconnect clearing it to ''), else keep what's stored.
+		foreach ( array(
+			'oauth_access_token',
+			'oauth_refresh_token',
+			'oauth_token_expires_at',
+			'oauth_location_id',
+			'oauth_location_name',
+			'oauth_user_id',
+			'oauth_connected_at',
+			'oauth_redirect_uri',
+		) as $oauth_key ) {
+			if ( is_array( $input ) && array_key_exists( $oauth_key, $input ) ) {
+				$to_save[ $oauth_key ] = $input[ $oauth_key ];
+			} elseif ( array_key_exists( $oauth_key, $raw_existing ) ) {
+				$to_save[ $oauth_key ] = $raw_existing[ $oauth_key ];
+			}
+		}
+
 		// When token is updated, sync into first location so all code paths use the new token
 		if ( ! empty( $to_save['private_token'] ) && ! empty( $to_save['locations'] ) && is_array( $to_save['locations'] ) ) {
 			if ( isset( $to_save['locations'][0] ) && is_array( $to_save['locations'][0] ) ) {
