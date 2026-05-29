@@ -373,6 +373,87 @@ class AQM_GHL_Admin {
 					</tr>
 				</table>
 
+				<?php
+				// ── Field mapping ──
+				// Let the user confirm/adjust how each selected form's fields fill the
+				// GHL contact. Values are auto-detected on first save; the dropdowns are
+				// pre-selected from the saved mapping (or the auto-detected guess for a
+				// form with no saved mapping yet). Saved by the main form via
+				// sanitize_settings(), which treats a submitted form's mapping as
+				// authoritative (so "— Not mapped —" sticks).
+				$map_selected = isset( $settings['form_ids'] ) ? array_map( 'absint', (array) $settings['form_ids'] ) : array();
+				$contact_fields = array(
+					'email'       => __( 'Email', 'aqm-ghl' ),
+					'first_name'  => __( 'First name', 'aqm-ghl' ),
+					'last_name'   => __( 'Last name', 'aqm-ghl' ),
+					'phone'       => __( 'Phone', 'aqm-ghl' ),
+					'address1'    => __( 'Street address', 'aqm-ghl' ),
+					'city'        => __( 'City', 'aqm-ghl' ),
+					'state'       => __( 'State / province', 'aqm-ghl' ),
+					'postal_code' => __( 'ZIP / postal code', 'aqm-ghl' ),
+				);
+				$form_names = array();
+				if ( ! empty( $forms ) ) {
+					foreach ( $forms as $f ) {
+						$form_names[ (int) $f->id ] = (string) $f->name;
+					}
+				}
+				?>
+				<h2 style="margin-top: 2em;"><?php esc_html_e( 'Field mapping', 'aqm-ghl' ); ?></h2>
+				<p class="description" style="max-width: 780px;">
+					<?php esc_html_e( 'How each form\'s fields fill the GoHighLevel contact. These are auto-detected — review and adjust any that look wrong, or choose “— Not mapped —” to skip one. Custom fields are matched automatically by label. Click Save Changes below to apply.', 'aqm-ghl' ); ?>
+				</p>
+
+				<?php if ( empty( $map_selected ) ) : ?>
+					<p class="description"><?php esc_html_e( 'Select at least one form above and click Save Changes to configure its field mapping.', 'aqm-ghl' ); ?></p>
+				<?php else : ?>
+					<?php foreach ( $map_selected as $fid ) : ?>
+						<?php
+						$fid       = absint( $fid );
+						$form_lbl  = isset( $form_names[ $fid ] ) ? $form_names[ $fid ] : sprintf( /* translators: %d: form ID */ __( 'Form %d', 'aqm-ghl' ), $fid );
+						$ff        = function_exists( 'aqm_ghl_get_formidable_form_fields' ) ? aqm_ghl_get_formidable_form_fields( $fid ) : array();
+						$cur       = isset( $settings['mapping'][ $fid ] ) && is_array( $settings['mapping'][ $fid ] ) ? $settings['mapping'][ $fid ] : array();
+						// Only fall back to a fresh auto-detect when this form has no saved
+						// mapping at all — otherwise respect what's stored (incl. blanks).
+						$auto      = ( empty( $cur ) && function_exists( 'aqm_ghl_autodetect_mapping_for_form' ) ) ? aqm_ghl_autodetect_mapping_for_form( $fid ) : array();
+						?>
+						<details style="margin: 0 0 10px; border: 1px solid #dcdcde; background: #fff;" <?php echo ( count( $map_selected ) === 1 ) ? 'open' : ''; ?>>
+							<summary style="cursor: pointer; padding: 10px 14px; background: #f6f7f7; font-weight: 600;">
+								<?php echo esc_html( $form_lbl ); ?>
+								<span class="description" style="font-weight: normal;">(ID: <?php echo (int) $fid; ?>)</span>
+							</summary>
+							<div style="padding: 6px 14px 12px;">
+								<?php if ( empty( $ff ) ) : ?>
+									<p class="description"><?php esc_html_e( 'No editable fields found on this form.', 'aqm-ghl' ); ?></p>
+								<?php else : ?>
+									<table class="form-table" role="presentation" style="margin-top: 0;">
+										<?php foreach ( $contact_fields as $ckey => $clabel ) : ?>
+											<?php
+											$selected_val = ! empty( $cur[ $ckey ] )
+												? (int) $cur[ $ckey ]
+												: ( ( empty( $cur ) && ! empty( $auto[ $ckey ] ) ) ? (int) $auto[ $ckey ] : 0 );
+											?>
+											<tr>
+												<th scope="row" style="width: 170px; padding: 8px 10px;"><label><?php echo esc_html( $clabel ); ?></label></th>
+												<td style="padding: 8px 10px;">
+													<select name="<?php echo esc_attr( AQM_GHL_OPTION_KEY ); ?>[mapping][<?php echo (int) $fid; ?>][<?php echo esc_attr( $ckey ); ?>]">
+														<option value=""><?php esc_html_e( '— Not mapped —', 'aqm-ghl' ); ?></option>
+														<?php foreach ( $ff as $field ) : ?>
+															<option value="<?php echo (int) $field['id']; ?>" <?php selected( $selected_val, (int) $field['id'] ); ?>>
+																<?php echo esc_html( ( '' !== $field['label'] ) ? $field['label'] : sprintf( /* translators: %d: field ID */ __( 'Field %d', 'aqm-ghl' ), $field['id'] ) ); ?> (ID: <?php echo (int) $field['id']; ?>)
+															</option>
+														<?php endforeach; ?>
+													</select>
+												</td>
+											</tr>
+										<?php endforeach; ?>
+									</table>
+								<?php endif; ?>
+							</div>
+						</details>
+					<?php endforeach; ?>
+				<?php endif; ?>
+
 				<h2 style="margin-top: 2em;"><?php esc_html_e( 'Optional settings', 'aqm-ghl' ); ?></h2>
 				<table class="form-table" role="presentation">
 					<tr>
@@ -813,51 +894,55 @@ class AQM_GHL_Admin {
 		$existing_mapping = isset( $existing['mapping'] ) && is_array( $existing['mapping'] ) ? $existing['mapping'] : array();
 		$existing_custom_fields = isset( $existing['custom_fields'] ) && is_array( $existing['custom_fields'] ) ? $existing['custom_fields'] : array();
 		
-		// Process new mapping data from form submission
-		$mapping = isset( $input['mapping'] ) && is_array( $input['mapping'] ) ? $input['mapping'] : array();
+		// Process new mapping data from the Field mapping UI. The UI submits all
+		// standard contact-field keys for each selected form (blank = intentionally
+		// "Not mapped"), so a submitted form's mapping is authoritative.
+		$std_map_keys      = array( 'email', 'first_name', 'last_name', 'phone', 'address1', 'city', 'state', 'postal_code' );
+		$mapping           = isset( $input['mapping'] ) && is_array( $input['mapping'] ) ? $input['mapping'] : array();
+		$mapping_submitted = array(); // Form IDs whose mapping came from the UI this save.
 		$sanitized['mapping'] = $existing_mapping; // Start with existing - preserve all
-		
+
 		if ( ! empty( $mapping ) ) {
 			foreach ( $mapping as $fid => $map_values ) {
 				$fid = absint( $fid );
-				if ( ! $fid ) {
+				if ( ! $fid || ! is_array( $map_values ) ) {
 					continue;
 				}
-				// Only update if form is selected
+				// Only update if form is selected; otherwise keep existing.
 				if ( ! in_array( $fid, $form_ids, true ) ) {
 					if ( isset( $existing_mapping[ $fid ] ) ) {
 						$sanitized['mapping'][ $fid ] = $existing_mapping[ $fid ];
 					}
 					continue;
 				}
-				// Update this form's mapping
-				$sanitized['mapping'][ $fid ] = array(
-					'email'      => isset( $map_values['email'] ) ? absint( $map_values['email'] ) : '',
-					'phone'      => isset( $map_values['phone'] ) ? absint( $map_values['phone'] ) : '',
-					'first_name' => isset( $map_values['first_name'] ) ? absint( $map_values['first_name'] ) : '',
-					'last_name'  => isset( $map_values['last_name'] ) ? absint( $map_values['last_name'] ) : '',
-				);
+				// Honor the user's explicit selection for every standard field.
+				$row = array();
+				foreach ( $std_map_keys as $sk ) {
+					$row[ $sk ] = isset( $map_values[ $sk ] ) ? absint( $map_values[ $sk ] ) : '';
+				}
+				$sanitized['mapping'][ $fid ] = $row;
+				$mapping_submitted[]          = $fid;
 			}
 		}
-		
-		// Ensure all selected forms have mapping entries (even if empty)
+
+		// Ensure all selected forms have a mapping entry (even if empty).
 		foreach ( $form_ids as $fid ) {
 			if ( ! isset( $sanitized['mapping'][ $fid ] ) ) {
 				$sanitized['mapping'][ $fid ] = isset( $existing_mapping[ $fid ] )
 					? $existing_mapping[ $fid ]
-					: array(
-						'email'      => '',
-						'phone'      => '',
-						'first_name' => '',
-						'last_name'  => '',
-					);
+					: array_fill_keys( $std_map_keys, '' );
 			}
 		}
 
-		// Auto-detect name/email/phone for any selected form that has no usable
-		// mapping yet. The manual mapping UI was removed, so submissions resolve
-		// contact fields automatically; existing (non-empty) mappings are kept.
+		// Auto-detect contact fields ONLY for selected forms the user did NOT
+		// configure via the UI this save (e.g. a form just ticked, or a legacy
+		// save with no mapping panel). Forms whose mapping was explicitly submitted
+		// are left exactly as chosen — so an intentional "Not mapped" sticks instead
+		// of being silently re-filled by autodetect.
 		foreach ( $form_ids as $fid ) {
+			if ( in_array( $fid, $mapping_submitted, true ) ) {
+				continue;
+			}
 			if ( ! function_exists( 'aqm_ghl_autodetect_mapping_for_form' ) ) {
 				break;
 			}
@@ -865,9 +950,8 @@ class AQM_GHL_Admin {
 			if ( empty( $detected ) ) {
 				continue;
 			}
-			// Merge: fill any missing keys (incl. address1/city/state/postal_code)
-			// without overwriting values already set, so existing forms pick up the
-			// address mapping on their next save.
+			// Fill any missing keys (incl. address1/city/state/postal_code) without
+			// overwriting values already set.
 			$current = isset( $sanitized['mapping'][ $fid ] ) && is_array( $sanitized['mapping'][ $fid ] ) ? $sanitized['mapping'][ $fid ] : array();
 			foreach ( $detected as $key => $detected_fid ) {
 				if ( empty( $current[ $key ] ) && ! empty( $detected_fid ) ) {
