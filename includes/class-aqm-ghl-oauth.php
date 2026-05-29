@@ -45,7 +45,22 @@ class AQM_GHL_OAuth {
 	 * @return string
 	 */
 	public static function get_redirect_uri() {
-		return AQM_GHL_OAUTH_REDIRECT_URI;
+		// Per-site override: if a site has its OWN callback URL already approved
+		// in the GHL app's redirect list, it can skip the broker and use that
+		// directly (set settings['oauth_redirect_uri']). Defaults to the broker
+		// for everyone else. The signed-state verification in handle_callback is
+		// identical either way, so this is safe for both modes.
+		$settings = function_exists( 'aqm_ghl_get_settings' ) ? aqm_ghl_get_settings() : array();
+		$override = isset( $settings['oauth_redirect_uri'] ) ? trim( (string) $settings['oauth_redirect_uri'] ) : '';
+		if ( '' !== $override ) {
+			return $override;
+		}
+		/**
+		 * Filter the OAuth redirect URI (advanced; normally the broker).
+		 *
+		 * @param string $uri The redirect URI sent to GHL for authorize + token exchange.
+		 */
+		return (string) apply_filters( 'aqm_ghl_oauth_redirect_uri', AQM_GHL_OAUTH_REDIRECT_URI );
 	}
 
 	/**
