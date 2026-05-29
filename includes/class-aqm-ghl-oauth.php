@@ -311,10 +311,12 @@ class AQM_GHL_OAuth {
 		// sub-account was chosen in the token response, so this is the earliest
 		// we can reject a wrong pick — and we do it BEFORE store_tokens() so a
 		// mismatched install never clobbers an existing good connection. Fails
-		// closed: a missing/blank locationId counts as a mismatch.
+		// OPEN when GHL returns no locationId (some exchanges omit it, hence the
+		// store_tokens fallback): we must never block a valid connect we simply
+		// cannot verify — only a CONFIRMED different sub-account is rejected.
 		if ( '' !== $expected_loc ) {
 			$actual_loc = isset( $result['locationId'] ) ? (string) $result['locationId'] : '';
-			if ( $expected_loc !== $actual_loc ) {
+			if ( '' !== $actual_loc && $expected_loc !== $actual_loc ) {
 				aqm_ghl_log(
 					'OAuth install rejected: chosen sub-account did not match the expected lock.',
 					array( 'expected' => $expected_loc, 'got' => '' !== $actual_loc ? $actual_loc : '(none)' )

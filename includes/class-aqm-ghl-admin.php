@@ -660,10 +660,7 @@ class AQM_GHL_Admin {
 						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block;">
 							<input type="hidden" name="action" value="aqm_oauth_start" />
 							<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
-							<?php if ( '' !== $location_id ) : ?>
-								<input type="hidden" name="aqm_expect_loc" value="<?php echo esc_attr( $location_id ); ?>" />
-							<?php endif; ?>
-							<button type="submit" class="button button-secondary" title="<?php esc_attr_e( 'Re-authorizes the SAME sub-account. To move this site to a different sub-account, Disconnect first, then Connect.', 'aqm-ghl' ); ?>"><?php esc_html_e( 'Reconnect', 'aqm-ghl' ); ?></button>
+							<button type="submit" class="button button-secondary"><?php esc_html_e( 'Reconnect', 'aqm-ghl' ); ?></button>
 						</form>
 						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block; margin-left: 4px;">
 							<input type="hidden" name="action" value="aqm_oauth_disconnect" />
