@@ -19,8 +19,17 @@ if ( ! function_exists( 'aqm_ghl_get_auth_mode' ) ) {
 			return $mode;
 		}
 
-		// Auto-detect: if OAuth tokens are populated, use OAuth; otherwise fall back to PIT.
-		if ( ! empty( $settings['oauth_access_token'] ) && ! empty( $settings['oauth_refresh_token'] ) ) {
+		// Auto-detect: an access token alone means OAuth completed and we can talk
+		// to GHL right now. We deliberately do NOT also require a refresh_token here
+		// — this MUST mirror AQM_GHL_OAuth::is_connected(), which dropped that
+		// requirement because some GHL token responses don't return a refresh_token.
+		// When the two checks disagreed, a refresh-token-less connection showed
+		// "Connected" in the UI (is_connected: access token present) yet silently
+		// routed every send through PIT mode (this function previously needed BOTH
+		// tokens) — so test sends and form submissions aborted on OAuth-only sites
+		// with no legacy PIT. aqm_ghl_get_active_auth() still falls back to PIT
+		// gracefully if the OAuth token can't actually be resolved at call time.
+		if ( ! empty( $settings['oauth_access_token'] ) ) {
 			return 'oauth';
 		}
 		return 'pit';
@@ -38,50 +47,74 @@ if ( ! function_exists( 'aqm_ghl_get_active_auth' ) ) {
 		$mode     = aqm_ghl_get_auth_mode();
 		$settings = aqm_ghl_get_settings();
 
+		// Resolve the legacy PIT credentials up front (top-level scalars, falling
+		// back to the first multi-location entry — post-migration sites may have
+		// empty top-level scalars). OAuth mode reuses these as a safety net below.
+		$pit_token       = isset( $settings['private_token'] ) ? (string) $settings['private_token'] : '';
+		$pit_location_id = isset( $settings['location_id'] )   ? (string) $settings['location_id']   : '';
+		if ( ( '' === $pit_token || '' === $pit_location_id ) && ! empty( $settings['locations'] ) && is_array( $settings['locations'] ) ) {
+			$first = reset( $settings['locations'] );
+			if ( is_array( $first ) ) {
+				if ( '' === $pit_token && ! empty( $first['private_token'] ) ) {
+					$pit_token = (string) $first['private_token'];
+				}
+				if ( '' === $pit_location_id && ! empty( $first['location_id'] ) ) {
+					$pit_location_id = (string) $first['location_id'];
+				}
+			}
+		}
+		$pit_available = ( '' !== $pit_token && '' !== $pit_location_id );
+
 		if ( 'oauth' === $mode ) {
+			$oauth_error = null;
 			if ( ! class_exists( 'AQM_GHL_OAuth' ) ) {
-				return new \WP_Error( 'oauth_class_missing', 'AQM_GHL_OAuth class not loaded.' );
+				$oauth_error = new \WP_Error( 'oauth_class_missing', 'AQM_GHL_OAuth class not loaded.' );
+			} else {
+				$token = AQM_GHL_OAuth::token();
+				if ( is_wp_error( $token ) ) {
+					$oauth_error = $token;
+				} else {
+					$location_id = isset( $settings['oauth_location_id'] ) ? (string) $settings['oauth_location_id'] : '';
+					if ( '' === $location_id ) {
+						$oauth_error = new \WP_Error( 'oauth_no_location', 'OAuth-connected but no location ID stored — reconnect to GoHighLevel.' );
+					} else {
+						return array(
+							'mode'        => 'oauth',
+							'token'       => $token,
+							'location_id' => $location_id,
+						);
+					}
+				}
 			}
-			$token = AQM_GHL_OAuth::token();
-			if ( is_wp_error( $token ) ) {
-				return $token;
+
+			// OAuth is the active mode but its token couldn't be resolved (e.g. an
+			// access_token that expired with no refresh_token to renew it, a revoked
+			// app, or a missing location ID). If a legacy PIT is still configured,
+			// use it rather than aborting the submission — the safety net for
+			// hybrid / mid-migration sites. Otherwise surface the OAuth error.
+			if ( $pit_available ) {
+				aqm_ghl_log(
+					'OAuth token unavailable; falling back to legacy PIT for this request.',
+					array( 'oauth_error' => $oauth_error ? $oauth_error->get_error_message() : 'unknown' )
+				);
+				return array(
+					'mode'        => 'pit',
+					'token'       => $pit_token,
+					'location_id' => $pit_location_id,
+				);
 			}
-			$location_id = isset( $settings['oauth_location_id'] ) ? (string) $settings['oauth_location_id'] : '';
-			if ( '' === $location_id ) {
-				return new \WP_Error( 'oauth_no_location', 'OAuth-connected but no location ID stored — reconnect to GoHighLevel.' );
-			}
-			return array(
-				'mode'        => 'oauth',
-				'token'       => $token,
-				'location_id' => $location_id,
-			);
+
+			return $oauth_error ? $oauth_error : new \WP_Error( 'oauth_unresolved', 'OAuth token could not be resolved.' );
 		}
 
 		// Legacy PIT path.
-		$token       = isset( $settings['private_token'] ) ? (string) $settings['private_token'] : '';
-		$location_id = isset( $settings['location_id'] )   ? (string) $settings['location_id']   : '';
-
-		// Fall back to first multi-location entry if top-level keys are blank
-		// (post-migration sites may have empty top-level scalars).
-		if ( ( '' === $token || '' === $location_id ) && ! empty( $settings['locations'] ) && is_array( $settings['locations'] ) ) {
-			$first = reset( $settings['locations'] );
-			if ( is_array( $first ) ) {
-				if ( '' === $token && ! empty( $first['private_token'] ) ) {
-					$token = (string) $first['private_token'];
-				}
-				if ( '' === $location_id && ! empty( $first['location_id'] ) ) {
-					$location_id = (string) $first['location_id'];
-				}
-			}
-		}
-
-		if ( '' === $token || '' === $location_id ) {
+		if ( ! $pit_available ) {
 			return new \WP_Error( 'pit_not_configured', 'Plugin is in PIT mode but no Private Integration Token or Location ID is set.' );
 		}
 		return array(
 			'mode'        => 'pit',
-			'token'       => $token,
-			'location_id' => $location_id,
+			'token'       => $pit_token,
+			'location_id' => $pit_location_id,
 		);
 	}
 }
