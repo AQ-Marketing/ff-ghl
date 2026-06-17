@@ -33,12 +33,35 @@ class AQM_GHL_Handler {
 	}
 
 	/**
-	 * Process the entry and send to GoHighLevel when applicable.
+	 * Formidable hook callback for LIVE submissions. Thin wrapper around
+	 * send_stored_entry() so the live path and the admin "backfill" path run the
+	 * exact same code and can never drift apart.
 	 *
 	 * @param int $entry_id Entry ID.
 	 * @param int $form_id  Form ID.
 	 */
 	public function maybe_send_to_ghl( $entry_id, $form_id ) {
+		$this->send_stored_entry( $entry_id, $form_id, array( 'source' => 'live' ) );
+	}
+
+	/**
+	 * Build the contact payload from a STORED Formidable entry and send it to
+	 * GoHighLevel. Every value is read from the saved entry meta (never $_POST),
+	 * so this can be replayed for any past entry by ID — which is exactly what the
+	 * admin "backfill / resend submissions" tool does. Returns a structured result
+	 * the caller can branch on.
+	 *
+	 * Note: fields whose value came only from the original page URL
+	 * ([frm_get param=...] defaults) and UTM/GCLID resolve to empty when replayed
+	 * outside the original request — they degrade gracefully and never abort.
+	 *
+	 * @param int   $entry_id Entry ID.
+	 * @param int   $form_id  Form ID.
+	 * @param array $context  Optional context, e.g. [ 'source' => 'live'|'backfill' ].
+	 * @return array { success:bool, status:int, contact_id:string, message:string }
+	 */
+	public function send_stored_entry( $entry_id, $form_id, $context = array() ) {
+		$source   = isset( $context['source'] ) ? (string) $context['source'] : 'live';
 		$settings = aqm_ghl_get_settings();
 
 		$form_ids = ! empty( $settings['form_ids'] ) && is_array( $settings['form_ids'] ) ? array_map( 'absint', $settings['form_ids'] ) : array();
@@ -52,10 +75,16 @@ class AQM_GHL_Handler {
 					'context' => array(
 						'entry_id' => (int) $entry_id,
 						'form_id'  => (int) $form_id,
+						'source'   => $source,
 					),
 				)
 			);
-			return;
+			return array(
+				'success'    => false,
+				'status'     => 0,
+				'contact_id' => '',
+				'message'    => __( 'This form is not enabled for GoHighLevel.', 'aqm-ghl' ),
+			);
 		}
 
 		// Resolve which auth path to use (OAuth or legacy PIT) and get a usable
@@ -76,10 +105,16 @@ class AQM_GHL_Handler {
 					'context' => array(
 						'entry_id' => (int) $entry_id,
 						'form_id'  => (int) $form_id,
+						'source'   => $source,
 					),
 				)
 			);
-			return;
+			return array(
+				'success'    => false,
+				'status'     => 0,
+				'contact_id' => '',
+				'message'    => $auth->get_error_message(),
+			);
 		}
 		$location_id = $auth['location_id'];
 		$bearer      = $auth['token'];
@@ -94,10 +129,16 @@ class AQM_GHL_Handler {
 					'context' => array(
 						'entry_id' => (int) $entry_id,
 						'form_id'  => (int) $form_id,
+						'source'   => $source,
 					),
 				)
 			);
-			return;
+			return array(
+				'success'    => false,
+				'status'     => 0,
+				'contact_id' => '',
+				'message'    => __( 'Formidable Forms is not available.', 'aqm-ghl' ),
+			);
 		}
 
 		$entry = FrmEntry::getOne( $entry_id, true );
@@ -112,10 +153,16 @@ class AQM_GHL_Handler {
 					'context' => array(
 						'entry_id' => (int) $entry_id,
 						'form_id'  => (int) $form_id,
+						'source'   => $source,
 					),
 				)
 			);
-			return;
+			return array(
+				'success'    => false,
+				'status'     => 0,
+				'contact_id' => '',
+				'message'    => __( 'Entry data could not be loaded (it may have been deleted).', 'aqm-ghl' ),
+			);
 		}
 
 		$metas = $entry->metas;
@@ -154,10 +201,16 @@ class AQM_GHL_Handler {
 					'context' => array(
 						'entry_id' => (int) $entry_id,
 						'form_id'  => (int) $form_id,
+						'source'   => $source,
 					),
 				)
 			);
-			return;
+			return array(
+				'success'    => false,
+				'status'     => 0,
+				'contact_id' => '',
+				'message'    => __( 'No email or phone on this submission — nothing to send.', 'aqm-ghl' ),
+			);
 		}
 
 		$utm_params = $this->utm_tracker->get_tracked_parameters();
@@ -229,10 +282,20 @@ class AQM_GHL_Handler {
 						'entry_id' => (int) $entry_id,
 						'form_id'  => (int) $form_id,
 						'utm_params' => $utm_params,
+						'source'   => $source,
 					),
 				)
 			);
-			return;
+			return array(
+				'success'    => false,
+				'status'     => 0,
+				'contact_id' => '',
+				'message'    => sprintf(
+					/* translators: %s: error detail */
+					__( 'Network error contacting GoHighLevel: %s', 'aqm-ghl' ),
+					$response->get_error_message()
+				),
+			);
 		}
 
 		$code = wp_remote_retrieve_response_code( $response );
@@ -257,10 +320,20 @@ class AQM_GHL_Handler {
 						'entry_id' => (int) $entry_id,
 						'form_id'  => (int) $form_id,
 						'utm_params' => $utm_params,
+						'source'   => $source,
 					),
 				)
 			);
-			return;
+			return array(
+				'success'    => false,
+				'status'     => (int) $code,
+				'contact_id' => '',
+				'message'    => sprintf(
+					/* translators: %d: HTTP status code */
+					__( 'GoHighLevel rejected the contact (HTTP %d).', 'aqm-ghl' ),
+					(int) $code
+				),
+			);
 		}
 
 		$response_body = wp_remote_retrieve_body( $response );
@@ -307,6 +380,7 @@ class AQM_GHL_Handler {
 					'form_id'    => (int) $form_id,
 					'utm_params' => $utm_params,
 					'contact_id' => $contact_id,
+					'source'     => $source,
 				),
 			)
 		);
@@ -350,6 +424,13 @@ class AQM_GHL_Handler {
 				)
 			);
 		}
+
+		return array(
+			'success'    => true,
+			'status'     => (int) $code,
+			'contact_id' => $contact_id,
+			'message'    => __( 'Sent to GoHighLevel.', 'aqm-ghl' ),
+		);
 	}
 
 	/**

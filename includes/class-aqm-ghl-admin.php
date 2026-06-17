@@ -18,6 +18,10 @@ class AQM_GHL_Admin {
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
 		add_action( 'wp_ajax_aqm_ghl_test_connection', array( $this, 'ajax_test_connection' ) );
 		add_action( 'wp_ajax_aqm_ghl_clear_update_cache', array( $this, 'ajax_clear_update_cache' ) );
+		// Backfill / resend past submissions to GoHighLevel.
+		add_action( 'wp_ajax_aqm_ghl_backfill_list', array( $this, 'ajax_backfill_list' ) );
+		add_action( 'wp_ajax_aqm_ghl_backfill_check', array( $this, 'ajax_backfill_check' ) );
+		add_action( 'wp_ajax_aqm_ghl_backfill_push', array( $this, 'ajax_backfill_push' ) );
 	}
 
 	/**
@@ -572,8 +576,323 @@ class AQM_GHL_Admin {
 				</details>
 
 			</form>
+
+			<?php $this->render_backfill_section( $settings, $forms ); ?>
 		</div>
 		<?php
+	}
+
+	/**
+	 * Render the "Backfill / resend submissions" section. Lets the admin push
+	 * past Formidable submissions (e.g. ones created before the connection
+	 * worked) to GoHighLevel: pick a form, choose a date range, load the
+	 * submissions, see which are already in GHL, and push the missing ones.
+	 *
+	 * Rendered OUTSIDE the settings <form> so its controls never submit to
+	 * options.php. All work happens over AJAX (see ajax_backfill_* handlers).
+	 *
+	 * @param array $settings Current plugin settings.
+	 * @param array $forms    All published Formidable forms.
+	 */
+	private function render_backfill_section( $settings, $forms ) {
+		$form_ids = isset( $settings['form_ids'] ) && is_array( $settings['form_ids'] ) ? array_map( 'absint', $settings['form_ids'] ) : array();
+
+		// Only the forms that are actually enabled for GHL are eligible.
+		$enabled = array();
+		if ( ! empty( $forms ) ) {
+			foreach ( $forms as $form ) {
+				$fid = (int) $form->id;
+				if ( in_array( $fid, $form_ids, true ) ) {
+					$enabled[ $fid ] = (string) $form->name;
+				}
+			}
+		}
+
+		// Default date range: last 30 days through today, in the site's timezone.
+		// wp_date() takes a real UTC timestamp (time()) and formats it in the site
+		// tz — avoids the double-offset bug of feeding current_time('timestamp').
+		$today        = current_time( 'Y-m-d' );
+		$default_to   = $today;
+		$default_from = wp_date( 'Y-m-d', time() - ( 30 * DAY_IN_SECONDS ) );
+		?>
+		<h2 style="margin-top: 2em;"><?php esc_html_e( 'Backfill / resend submissions', 'aqm-ghl' ); ?></h2>
+		<p class="description" style="max-width: 820px;">
+			<?php esc_html_e( 'Send past form submissions to GoHighLevel — useful for entries created before the connection was working. Pick a form, choose a date range, and load the submissions. Each row shows whether that contact is already in GoHighLevel; tick the ones you want and push them. Submissions already in GoHighLevel are skipped, so nothing is overwritten or duplicated.', 'aqm-ghl' ); ?>
+		</p>
+
+		<?php if ( empty( $enabled ) ) : ?>
+			<div class="notice notice-info inline" style="margin: 1em 0;"><p>
+				<?php esc_html_e( 'No forms are enabled for GoHighLevel yet. Tick at least one form under "Which forms to send" above and save, then come back here.', 'aqm-ghl' ); ?>
+			</p></div>
+		<?php else : ?>
+			<div class="aqm-ghl-backfill" style="margin: 1em 0; border: 1px solid #dcdcde; background: #fff; padding: 16px 18px; max-width: 1100px;">
+				<table class="form-table" role="presentation" style="margin-top: 0;">
+					<tr>
+						<th scope="row"><label for="aqm-ghl-bf-form"><?php esc_html_e( 'Form', 'aqm-ghl' ); ?></label></th>
+						<td>
+							<select id="aqm-ghl-bf-form">
+								<?php foreach ( $enabled as $fid => $fname ) : ?>
+									<option value="<?php echo esc_attr( $fid ); ?>"><?php echo esc_html( $fname ); ?> <?php /* translators: %d: form ID */ printf( esc_html__( '(ID: %d)', 'aqm-ghl' ), (int) $fid ); ?></option>
+								<?php endforeach; ?>
+							</select>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><?php esc_html_e( 'Date range', 'aqm-ghl' ); ?></th>
+						<td>
+							<label><?php esc_html_e( 'From', 'aqm-ghl' ); ?>
+								<input type="date" id="aqm-ghl-bf-from" value="<?php echo esc_attr( $default_from ); ?>" max="<?php echo esc_attr( $today ); ?>">
+							</label>
+							&nbsp;
+							<label><?php esc_html_e( 'To', 'aqm-ghl' ); ?>
+								<input type="date" id="aqm-ghl-bf-to" value="<?php echo esc_attr( $default_to ); ?>" max="<?php echo esc_attr( $today ); ?>">
+							</label>
+							<p class="description"><?php esc_html_e( 'Filters by the date each submission was created. Dates use this site\'s time zone.', 'aqm-ghl' ); ?></p>
+						</td>
+					</tr>
+				</table>
+
+				<p>
+					<button type="button" class="button button-secondary" id="aqm-ghl-bf-load"><?php esc_html_e( 'Load submissions', 'aqm-ghl' ); ?></button>
+					<span id="aqm-ghl-bf-load-status" style="margin-left: 10px; color: #50575e;"></span>
+				</p>
+
+				<div id="aqm-ghl-bf-results" style="display:none; margin-top: 12px;">
+					<table class="widefat striped aqm-ghl-bf-table">
+						<thead>
+							<tr>
+								<td class="check-column"><input type="checkbox" id="aqm-ghl-bf-select-all" title="<?php esc_attr_e( 'Select all sendable', 'aqm-ghl' ); ?>"></td>
+								<th><?php esc_html_e( 'Date', 'aqm-ghl' ); ?></th>
+								<th><?php esc_html_e( 'Name', 'aqm-ghl' ); ?></th>
+								<th><?php esc_html_e( 'Email', 'aqm-ghl' ); ?></th>
+								<th><?php esc_html_e( 'In GoHighLevel?', 'aqm-ghl' ); ?></th>
+								<th><?php esc_html_e( 'Result', 'aqm-ghl' ); ?></th>
+							</tr>
+						</thead>
+						<tbody id="aqm-ghl-bf-rows"></tbody>
+					</table>
+
+					<p style="margin-top: 12px;">
+						<button type="button" class="button button-primary" id="aqm-ghl-bf-push" disabled><?php esc_html_e( 'Push selected to GoHighLevel', 'aqm-ghl' ); ?></button>
+						<span id="aqm-ghl-bf-push-status" style="margin-left: 10px; color: #50575e;"></span>
+					</p>
+				</div>
+			</div>
+		<?php endif; ?>
+		<?php
+	}
+
+	/**
+	 * Shared guard for the backfill AJAX endpoints: verify the nonce and the
+	 * manage_options capability, then validate that the posted form_id is one of
+	 * the forms actually enabled for GoHighLevel (so the tool can't be pointed at
+	 * arbitrary forms). On any failure it sends a JSON error and halts the
+	 * request (wp_send_json_error → wp_die), so callers only ever see an int.
+	 *
+	 * @return int The validated form_id (or the request has already exited).
+	 */
+	private function backfill_guard() {
+		check_ajax_referer( 'aqm_ghl_admin', 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( array( 'message' => __( 'Unauthorized', 'aqm-ghl' ) ), 403 );
+		}
+		$form_id  = isset( $_POST['form_id'] ) ? absint( wp_unslash( $_POST['form_id'] ) ) : 0;
+		$settings = aqm_ghl_get_settings();
+		$form_ids = isset( $settings['form_ids'] ) && is_array( $settings['form_ids'] ) ? array_map( 'absint', $settings['form_ids'] ) : array();
+		if ( ! $form_id || ! in_array( $form_id, $form_ids, true ) ) {
+			wp_send_json_error( array( 'message' => __( 'That form is not enabled for GoHighLevel.', 'aqm-ghl' ) ), 400 );
+		}
+		return $form_id;
+	}
+
+	/**
+	 * Validate a Y-m-d date string.
+	 *
+	 * @param string $d Date string.
+	 * @return bool
+	 */
+	private function is_valid_ymd( $d ) {
+		if ( ! is_string( $d ) || ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $d ) ) {
+			return false;
+		}
+		return checkdate( (int) substr( $d, 5, 2 ), (int) substr( $d, 8, 2 ), (int) substr( $d, 0, 4 ) );
+	}
+
+	/**
+	 * AJAX: list a form's submissions within a date range (DB only — no GHL
+	 * calls, so it's fast). Returns rows with date/name/email; the GHL "already
+	 * there?" status is filled in afterward by ajax_backfill_check in batches.
+	 */
+	public function ajax_backfill_list() {
+		$form_id = $this->backfill_guard();
+
+		$from = isset( $_POST['from'] ) ? sanitize_text_field( wp_unslash( $_POST['from'] ) ) : '';
+		$to   = isset( $_POST['to'] )   ? sanitize_text_field( wp_unslash( $_POST['to'] ) )   : '';
+		$page = isset( $_POST['page'] ) ? max( 1, absint( wp_unslash( $_POST['page'] ) ) ) : 1;
+
+		if ( ! $this->is_valid_ymd( $from ) || ! $this->is_valid_ymd( $to ) ) {
+			wp_send_json_error( array( 'message' => __( 'Please choose a valid From and To date.', 'aqm-ghl' ) ), 400 );
+		}
+		if ( $from > $to ) {
+			wp_send_json_error( array( 'message' => __( 'The From date must be on or before the To date.', 'aqm-ghl' ) ), 400 );
+		}
+
+		// Convert the site-timezone day bounds to UTC, because Formidable stores
+		// created_at in UTC. Whole-day inclusive: 00:00:00 → 23:59:59 local.
+		$from_utc = get_gmt_from_date( $from . ' 00:00:00', 'Y-m-d H:i:s' );
+		$to_utc   = get_gmt_from_date( $to . ' 23:59:59', 'Y-m-d H:i:s' );
+
+		$page_size = 200;
+		$offset    = ( $page - 1 ) * $page_size;
+		$total     = aqm_ghl_count_entries_by_date( $form_id, $from_utc, $to_utc );
+		$entries   = aqm_ghl_query_entries_by_date( $form_id, $from_utc, $to_utc, $page_size, $offset );
+
+		$rows = array();
+		foreach ( $entries as $e ) {
+			$fields = aqm_ghl_get_entry_summary_fields( $e['id'], $form_id );
+			$rows[] = array(
+				'entry_id'   => (int) $e['id'],
+				'date'       => get_date_from_gmt( $e['created_at'], 'M j, Y g:i a' ),
+				'name'       => $fields['name'],
+				'email'      => $fields['email'],
+				'sendable'   => ( '' !== $fields['email'] ), // need an email to dedupe + a contact key
+			);
+		}
+
+		wp_send_json_success(
+			array(
+				'rows'      => $rows,
+				'total'     => (int) $total,
+				'page'      => (int) $page,
+				'page_size' => (int) $page_size,
+				'returned'  => count( $rows ),
+			)
+		);
+	}
+
+	/**
+	 * AJAX: for a small batch of entry IDs, check whether each one's email
+	 * already exists as a contact in GoHighLevel. Drives the per-row status badge
+	 * AND the skip-if-exists behaviour. The browser calls this in batches.
+	 */
+	public function ajax_backfill_check() {
+		$form_id = $this->backfill_guard();
+
+		$ids = isset( $_POST['entry_ids'] ) && is_array( $_POST['entry_ids'] )
+			? array_values( array_unique( array_filter( array_map( 'absint', wp_unslash( $_POST['entry_ids'] ) ) ) ) )
+			: array();
+		if ( empty( $ids ) ) {
+			wp_send_json_error( array( 'message' => __( 'No submissions to check.', 'aqm-ghl' ) ), 400 );
+		}
+		$ids = array_slice( $ids, 0, 25 ); // defensive cap
+
+		$auth = aqm_ghl_get_active_auth();
+		if ( is_wp_error( $auth ) ) {
+			wp_send_json_error( array( 'message' => __( 'Not connected to GoHighLevel.', 'aqm-ghl' ) . ' ' . $auth->get_error_message() ), 400 );
+		}
+
+		$results = array();
+		foreach ( $ids as $id ) {
+			$fields = aqm_ghl_get_entry_summary_fields( $id, $form_id );
+			if ( '' === $fields['email'] ) {
+				$results[] = array( 'entry_id' => $id, 'status' => 'no_email', 'contact_id' => '' );
+				continue;
+			}
+			$lookup = aqm_ghl_find_contact_by_email( $auth['location_id'], $fields['email'], $auth['token'] );
+			if ( is_wp_error( $lookup ) ) {
+				$results[] = array( 'entry_id' => $id, 'status' => 'error', 'contact_id' => '', 'message' => $lookup->get_error_message() );
+			} elseif ( ! empty( $lookup['found'] ) ) {
+				$results[] = array( 'entry_id' => $id, 'status' => 'in_ghl', 'contact_id' => (string) $lookup['contact_id'] );
+			} else {
+				$results[] = array( 'entry_id' => $id, 'status' => 'not_in_ghl', 'contact_id' => '' );
+			}
+			usleep( 120000 ); // ~120ms between lookups — stay under GHL rate limits
+		}
+
+		wp_send_json_success( array( 'results' => $results ) );
+	}
+
+	/**
+	 * AJAX: push a batch of selected entries to GoHighLevel. Each entry is
+	 * re-checked by email first; if a contact already exists it's SKIPPED
+	 * (nothing overwritten). Otherwise it runs through the exact same pipeline a
+	 * live submission uses (field mapping, custom fields, tags, opportunity), via
+	 * AQM_GHL_Handler::send_stored_entry(). The browser sends entries in small
+	 * batches and renders each result as it returns.
+	 */
+	public function ajax_backfill_push() {
+		$form_id = $this->backfill_guard();
+
+		$ids = isset( $_POST['entry_ids'] ) && is_array( $_POST['entry_ids'] )
+			? array_values( array_unique( array_filter( array_map( 'absint', wp_unslash( $_POST['entry_ids'] ) ) ) ) )
+			: array();
+		if ( empty( $ids ) ) {
+			wp_send_json_error( array( 'message' => __( 'No submissions selected.', 'aqm-ghl' ) ), 400 );
+		}
+		if ( count( $ids ) > 25 ) {
+			wp_send_json_error( array( 'message' => __( 'Too many at once — push in smaller batches.', 'aqm-ghl' ) ), 400 );
+		}
+
+		// Resolve auth once; bail early on a dead connection rather than looping.
+		$auth = aqm_ghl_get_active_auth();
+		if ( is_wp_error( $auth ) ) {
+			wp_send_json_error( array( 'message' => __( 'Not connected to GoHighLevel.', 'aqm-ghl' ) . ' ' . $auth->get_error_message() ), 400 );
+		}
+
+		if ( ! class_exists( 'AQM_GHL_Handler' ) ) {
+			wp_send_json_error( array( 'message' => __( 'Send handler unavailable.', 'aqm-ghl' ) ), 500 );
+		}
+		$handler = new AQM_GHL_Handler();
+
+		$results = array();
+		foreach ( $ids as $id ) {
+			$fields = aqm_ghl_get_entry_summary_fields( $id, $form_id );
+
+			// Skip-if-exists: when we have an email and GHL already has a contact
+			// with it, leave the existing contact untouched.
+			if ( '' !== $fields['email'] ) {
+				$lookup = aqm_ghl_find_contact_by_email( $auth['location_id'], $fields['email'], $auth['token'] );
+				if ( ! is_wp_error( $lookup ) && ! empty( $lookup['found'] ) ) {
+					$results[] = array(
+						'entry_id'   => $id,
+						'outcome'    => 'skipped',
+						'contact_id' => (string) $lookup['contact_id'],
+						'message'    => __( 'Already in GoHighLevel — skipped.', 'aqm-ghl' ),
+					);
+					continue;
+				}
+			}
+
+			$res = $handler->send_stored_entry( $id, $form_id, array( 'source' => 'backfill' ) );
+
+			if ( ! empty( $res['success'] ) ) {
+				$results[] = array(
+					'entry_id'   => $id,
+					'outcome'    => 'sent',
+					'contact_id' => isset( $res['contact_id'] ) ? (string) $res['contact_id'] : '',
+					'message'    => __( 'Sent to GoHighLevel.', 'aqm-ghl' ),
+				);
+			} elseif ( isset( $res['status'] ) && 400 === (int) $res['status'] ) {
+				// A 400 here almost always means GHL already has this contact
+				// (duplicate) — treat as skipped rather than a hard failure.
+				$results[] = array(
+					'entry_id'   => $id,
+					'outcome'    => 'skipped',
+					'contact_id' => '',
+					'message'    => __( 'Looks like it\'s already in GoHighLevel — skipped.', 'aqm-ghl' ),
+				);
+			} else {
+				$results[] = array(
+					'entry_id'   => $id,
+					'outcome'    => 'failed',
+					'contact_id' => '',
+					'message'    => isset( $res['message'] ) ? (string) $res['message'] : __( 'Could not send.', 'aqm-ghl' ),
+				);
+			}
+			usleep( 150000 ); // ~150ms between sends — be gentle on GHL rate limits
+		}
+
+		wp_send_json_success( array( 'results' => $results ) );
 	}
 
 	/**

@@ -1155,3 +1155,197 @@ if ( ! function_exists( 'aqm_ghl_sanitize_opportunity_form_binding' ) ) {
 	}
 }
 
+if ( ! function_exists( 'aqm_ghl_find_contact_by_email' ) ) {
+	/**
+	 * Look up whether a contact with this email already exists in the GHL
+	 * sub-account. Used by the backfill tool to (a) show a per-row "already in
+	 * GHL" status and (b) skip pushing entries that are already there.
+	 *
+	 * Endpoint: GET /contacts/search/duplicate?locationId=...&email=...
+	 * Scope:    contacts.readonly
+	 *
+	 * @param string $location_id GHL location ID.
+	 * @param string $email       Email to search for.
+	 * @param string $token       Bearer token (PIT or OAuth access token).
+	 *
+	 * @return array|\WP_Error array{ found:bool, contact_id:string } on success,
+	 *                         WP_Error on transport/API failure (e.g. missing scope).
+	 */
+	function aqm_ghl_find_contact_by_email( $location_id, $email, $token ) {
+		$email = sanitize_email( (string) $email );
+		if ( '' === $email || '' === (string) $location_id ) {
+			return array( 'found' => false, 'contact_id' => '' );
+		}
+
+		$url = add_query_arg(
+			array(
+				'locationId' => $location_id,
+				'email'      => $email,
+			),
+			'https://services.leadconnectorhq.com/contacts/search/duplicate'
+		);
+
+		$response = wp_remote_get(
+			$url,
+			array(
+				'headers' => array(
+					'Authorization' => 'Bearer ' . $token,
+					'Version'       => '2021-07-28',
+					'Accept'        => 'application/json',
+				),
+				'timeout' => 15,
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( $code < 200 || $code >= 300 ) {
+			$msg = is_array( $body ) && isset( $body['message'] ) ? $body['message'] : wp_remote_retrieve_body( $response );
+			return new \WP_Error( 'ghl_lookup_error', sprintf( 'GHL contact lookup returned %d: %s', $code, $msg ) );
+		}
+
+		$contact_id = '';
+		if ( is_array( $body ) && ! empty( $body['contact']['id'] ) ) {
+			$contact_id = (string) $body['contact']['id'];
+		}
+
+		return array(
+			'found'      => ( '' !== $contact_id ),
+			'contact_id' => $contact_id,
+		);
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_query_entries_by_date' ) ) {
+	/**
+	 * Return Formidable entry IDs for a form created within a UTC datetime range,
+	 * newest first. Reads {prefix}frm_items.created_at directly (Formidable has no
+	 * public date-range query API). created_at is stored in UTC; callers convert
+	 * the admin's site-timezone date inputs to UTC before calling.
+	 *
+	 * @param int    $form_id  Formidable form ID.
+	 * @param string $from_utc Lower bound, 'Y-m-d H:i:s' UTC (inclusive).
+	 * @param string $to_utc   Upper bound, 'Y-m-d H:i:s' UTC (inclusive).
+	 * @param int    $limit    Max rows to return.
+	 * @param int    $offset   Row offset for pagination.
+	 *
+	 * @return array List of array{ id:int, created_at:string }.
+	 */
+	function aqm_ghl_query_entries_by_date( $form_id, $from_utc, $to_utc, $limit = 200, $offset = 0 ) {
+		global $wpdb;
+		$form_id = absint( $form_id );
+		$limit   = max( 1, min( 1000, (int) $limit ) );
+		$offset  = max( 0, (int) $offset );
+		if ( ! $form_id ) {
+			return array();
+		}
+		$table = $wpdb->prefix . 'frm_items';
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is a trusted prefix concat; all values are bound.
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT id, created_at FROM {$table} WHERE form_id = %d AND created_at >= %s AND created_at <= %s ORDER BY created_at DESC LIMIT %d OFFSET %d",
+				$form_id,
+				$from_utc,
+				$to_utc,
+				$limit,
+				$offset
+			)
+		);
+		// phpcs:enable
+		$out = array();
+		if ( is_array( $rows ) ) {
+			foreach ( $rows as $r ) {
+				$out[] = array(
+					'id'         => (int) $r->id,
+					'created_at' => (string) $r->created_at,
+				);
+			}
+		}
+		return $out;
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_count_entries_by_date' ) ) {
+	/**
+	 * Count Formidable entries for a form within a UTC datetime range.
+	 *
+	 * @param int    $form_id  Formidable form ID.
+	 * @param string $from_utc Lower bound 'Y-m-d H:i:s' UTC (inclusive).
+	 * @param string $to_utc   Upper bound 'Y-m-d H:i:s' UTC (inclusive).
+	 *
+	 * @return int
+	 */
+	function aqm_ghl_count_entries_by_date( $form_id, $from_utc, $to_utc ) {
+		global $wpdb;
+		$form_id = absint( $form_id );
+		if ( ! $form_id ) {
+			return 0;
+		}
+		$table = $wpdb->prefix . 'frm_items';
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is a trusted prefix concat; all values are bound.
+		$count = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT COUNT(*) FROM {$table} WHERE form_id = %d AND created_at >= %s AND created_at <= %s",
+				$form_id,
+				$from_utc,
+				$to_utc
+			)
+		);
+		// phpcs:enable
+		return (int) $count;
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_get_entry_summary_fields' ) ) {
+	/**
+	 * Read a stored entry's display fields (name + email) for the backfill list,
+	 * using the same per-form field mapping the live send uses. Reads from saved
+	 * entry meta — no $_POST, no network.
+	 *
+	 * @param int $entry_id Formidable entry ID.
+	 * @param int $form_id  Formidable form ID.
+	 *
+	 * @return array array{ email:string, name:string }.
+	 */
+	function aqm_ghl_get_entry_summary_fields( $entry_id, $form_id ) {
+		$out = array( 'email' => '', 'name' => '' );
+		if ( ! class_exists( 'FrmEntry' ) ) {
+			return $out;
+		}
+		$entry = FrmEntry::getOne( absint( $entry_id ), true );
+		if ( ! $entry || empty( $entry->metas ) || ! is_array( $entry->metas ) ) {
+			return $out;
+		}
+		$metas    = $entry->metas;
+		$settings = aqm_ghl_get_settings();
+		$map_all  = isset( $settings['mapping'] ) ? $settings['mapping'] : array();
+		$map      = isset( $map_all[ $form_id ] ) ? $map_all[ $form_id ] : array();
+
+		$pluck = function ( $key ) use ( $metas, $map ) {
+			$fid = isset( $map[ $key ] ) ? (int) $map[ $key ] : 0;
+			if ( ! $fid || ! isset( $metas[ $fid ] ) ) {
+				return '';
+			}
+			$val = $metas[ $fid ];
+			if ( is_array( $val ) ) {
+				$val = reset( $val );
+			}
+			return trim( (string) $val );
+		};
+
+		$email = sanitize_email( $pluck( 'email' ) );
+		$first = sanitize_text_field( $pluck( 'first_name' ) );
+		$last  = sanitize_text_field( $pluck( 'last_name' ) );
+		$name  = trim( $first . ' ' . $last );
+
+		$out['email'] = $email;
+		$out['name']  = $name;
+		return $out;
+	}
+}
+

@@ -229,4 +229,70 @@
 	min-width: 260px;
 }
 
+/* ---- Backfill / resend submissions ---- */
+.aqm-ghl-bf-table {
+	margin-top: 8px;
+}
+
+.aqm-ghl-bf-table th,
+.aqm-ghl-bf-table td {
+	vertical-align: middle;
+}
+
+.aqm-ghl-bf-table td.check-column,
+.aqm-ghl-bf-table th.check-column {
+	width: 2.2em;
+	text-align: center;
+}
+
+.aqm-ghl-bf-badge {
+	display: inline-block;
+	padding: 2px 8px;
+	border-radius: 999px;
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 1.6;
+	white-space: nowrap;
+	border: 1px solid transparent;
+}
+
+.aqm-ghl-bf-badge--in {
+	color: #0a4f1c;
+	background: #edfaef;
+	border-color: #00a32a;
+}
+
+.aqm-ghl-bf-badge--out {
+	color: #8a5300;
+	background: #fcf6e1;
+	border-color: #dba617;
+}
+
+.aqm-ghl-bf-badge--na,
+.aqm-ghl-bf-badge--checking {
+	color: #50575e;
+	background: #f6f7f7;
+	border-color: #c3c4c7;
+}
+
+.aqm-ghl-bf-badge--err {
+	color: #8a1f21;
+	background: #fcf0f1;
+	border-color: #d63638;
+}
+
+.aqm-ghl-bf-result .aqm-ghl-bf-ok {
+	color: #0a4f1c;
+	font-weight: 600;
+}
+
+.aqm-ghl-bf-result .aqm-ghl-bf-skip {
+	color: #50575e;
+}
+
+.aqm-ghl-bf-result .aqm-ghl-bf-fail {
+	color: #d63638;
+	font-weight: 600;
+}
+
 
