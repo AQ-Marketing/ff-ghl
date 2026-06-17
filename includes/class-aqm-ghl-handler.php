@@ -287,6 +287,14 @@ class AQM_GHL_Handler {
 				'contact_id' => $contact_id,
 			)
 		);
+
+		// A live 2xx send is hard proof the OAuth connection works right now.
+		// Mark it verified so the admin status badge reflects reality and a
+		// stale negative verdict can't outlive a connection that's actively
+		// delivering leads. OAuth mode only; never asserts a false "connected".
+		if ( 'oauth' === ( isset( $auth['mode'] ) ? $auth['mode'] : '' ) && class_exists( 'AQM_GHL_OAuth' ) ) {
+			set_transient( AQM_GHL_OAuth::VERIFY_TRANSIENT, '1', 5 * MINUTE_IN_SECONDS );
+		}
 		aqm_ghl_store_last_submission_result(
 			array(
 				'success'  => true,

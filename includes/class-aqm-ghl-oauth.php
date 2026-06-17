@@ -496,6 +496,13 @@ class AQM_GHL_OAuth {
 		// Fresh tokens — any prior "is this connected?" verdict is now stale.
 		self::invalidate_verification_cache();
 
+		// store_tokens only ever runs after a SUCCESSFUL token exchange or
+		// refresh, so the token we just wrote is known-good right now. Prime the
+		// positive verdict so the immediate post-Connect render shows "connected"
+		// even when Pressable's object cache hasn't yet reflected the option
+		// write (the stale-read window that otherwise made the first render lie).
+		set_transient( self::VERIFY_TRANSIENT, '1', 5 * MINUTE_IN_SECONDS );
+
 		// Forced diagnostic (writes to wp-content/aqm-ghl-diag.log regardless of
 		// the debug-logging toggle) so we can confirm what the token endpoint
 		// returned and that the write actually stuck — without ever logging the
@@ -617,6 +624,19 @@ class AQM_GHL_OAuth {
 		if ( $expires_at - time() <= self::REFRESH_BUFFER_SECONDS ) {
 			$result = $this->refresh_tokens();
 			if ( is_wp_error( $result ) ) {
+				// The refresh failed — but this branch fires up to 5 min BEFORE
+				// the token actually expires, so the current access token is very
+				// often still valid right now. GHL rotates the refresh token on
+				// every use, so a benign cause (a concurrent request already
+				// consumed it, a transient 5xx, or a stale-cache expiry read on
+				// Pressable) must NOT make a working connection read as "lost".
+				// Only surface the error when the current token has GENUINELY
+				// expired; otherwise keep using it. A truly expired/revoked token
+				// (expires_at in the past, or unknown=0) still returns the error,
+				// so this can't revive the original "green while sends fail" bug.
+				if ( $expires_at > 0 && ( $expires_at - time() ) > 0 ) {
+					return $access;
+				}
 				return $result;
 			}
 			// Re-read from settings after refresh.
@@ -686,10 +706,16 @@ class AQM_GHL_OAuth {
 			return false;
 		}
 
+		// Honor only a cached POSITIVE verdict. We deliberately never trust a
+		// cached '0': a single benign blip (a proactive-refresh failure, a
+		// momentary network error, a stale object-cache read on Pressable) must
+		// not be able to paint the UI "lost" for 5 minutes. Ignoring negatives
+		// means the status self-heals on the very next render once the token
+		// verifies again — while a positive verdict is still cached so we don't
+		// ping GHL's token endpoint on every page load.
 		if ( ! $force_fresh ) {
-			$cached = get_transient( self::VERIFY_TRANSIENT );
-			if ( false !== $cached ) {
-				return ( '1' === (string) $cached );
+			if ( '1' === (string) get_transient( self::VERIFY_TRANSIENT ) ) {
+				return true;
 			}
 		}
 
@@ -697,9 +723,13 @@ class AQM_GHL_OAuth {
 		$result   = $instance->get_access_token();
 		$ok       = ! is_wp_error( $result ) && '' !== (string) $result;
 
-		// Short TTL — tokens can be revoked out-of-band, and we want the UI
-		// to react reasonably quickly without spamming the GHL endpoint.
-		set_transient( self::VERIFY_TRANSIENT, $ok ? '1' : '0', 5 * MINUTE_IN_SECONDS );
+		if ( $ok ) {
+			set_transient( self::VERIFY_TRANSIENT, '1', 5 * MINUTE_IN_SECONDS );
+		} else {
+			// Don't cache the failure — clear any prior verdict and re-verify
+			// next render rather than locking in a false "lost".
+			delete_transient( self::VERIFY_TRANSIENT );
+		}
 
 		return $ok;
 	}

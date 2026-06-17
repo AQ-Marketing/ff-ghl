@@ -1385,6 +1385,17 @@ class AQM_GHL_Admin {
 			)
 		);
 
+		// A real 2xx (or a duplicate-contact 400, both handled above) is hard
+		// proof the OAuth token + sub-account work right now — the strongest
+		// possible evidence of a live connection. Honor it: mark the connection
+		// verified so the badge and notices reflect reality on the next render,
+		// overriding any stale negative the page may have computed earlier. Only
+		// fires in OAuth mode after a send that genuinely reached and
+		// authenticated to GHL, so it can't assert a false "connected".
+		if ( 'oauth' === ( isset( $auth['mode'] ) ? $auth['mode'] : '' ) && class_exists( 'AQM_GHL_OAuth' ) ) {
+			set_transient( AQM_GHL_OAuth::VERIFY_TRANSIENT, '1', 5 * MINUTE_IN_SECONDS );
+		}
+
 		// Include field mapping info in response for debugging
 		$message = $base_message;
 		
