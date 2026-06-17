@@ -184,7 +184,12 @@ class AQM_GHL_Admin {
 		// Single source of truth for the badge under the page title. Reflects the
 		// ACTIVE verification (tokens that exist but no longer work read as "lost",
 		// not "connected"). PIT-only legacy sites still read as connected.
-		$eyebrow_oauth_ok   = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_truly_connected();
+		// "Connected" requires usable tokens AND a known sub-account (is_ready) —
+		// not just valid tokens. Tokens that verify but have no resolvable
+		// sub-account can't actually send leads, so they read as "lost" (reconnect)
+		// rather than falsely green. This keeps the badge in agreement with the
+		// Test connection panel below, which has always required a sub-account.
+		$eyebrow_oauth_ok   = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_ready();
 		$eyebrow_oauth_has  = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
 		$eyebrow_pit_ok     = ! empty( $settings['location_id'] ) && ! empty( $settings['private_token'] );
 		$eyebrow_loc_name   = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
@@ -498,7 +503,11 @@ class AQM_GHL_Admin {
 						$test_loc_nm = '';
 						$test_ready  = false;
 						if ( 'oauth' === $test_mode ) {
-							$test_loc_id = isset( $settings['oauth_location_id'] )   ? (string) $settings['oauth_location_id']   : '';
+							// Resolve via the self-healing accessor (backfills a missing
+							// location ID from the access token JWT) rather than reading the
+							// raw setting, so a site connected before the location-ID fix
+							// shows "connected" here without needing a reconnect.
+							$test_loc_id = class_exists( 'AQM_GHL_OAuth' ) ? AQM_GHL_OAuth::location_id() : '';
 							$test_loc_nm = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
 							$test_ready  = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected() && '' !== $test_loc_id;
 						} else {
@@ -595,7 +604,7 @@ class AQM_GHL_Admin {
 		// deleted sub-account, etc.) we show a "Connection lost" state with
 		// a fresh Connect button instead of falsely claiming connected status.
 		$has_tokens       = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
-		$is_connected     = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_truly_connected();
+		$is_connected     = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_ready();
 		$tokens_broken    = $has_tokens && ! $is_connected;
 		$location_name    = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
 		$location_id      = isset( $settings['oauth_location_id'] )   ? (string) $settings['oauth_location_id']   : '';

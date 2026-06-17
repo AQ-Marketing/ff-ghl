@@ -236,6 +236,16 @@ class AQM_GHL_OAuth {
 		$err      = isset( $_GET['error'] )    ? sanitize_text_field( wp_unslash( $_GET['error'] ) )    : '';
 		$err_desc = isset( $_GET['error_description'] ) ? sanitize_text_field( wp_unslash( $_GET['error_description'] ) ) : '';
 
+		// GHL also forwards the chosen sub-account as a `locationId` query param on
+		// the redirect. We keep it as a fallback source for the location ID because
+		// the token-exchange response sometimes omits it (just like it sometimes
+		// omits the refresh_token) — and without a location ID the plugin ends up
+		// "connected" with no idea which sub-account to send leads to. Alphanumeric
+		// (+ _ and -) only, matching handle_start()'s sanitisation.
+		$loc_param = isset( $_GET['locationId'] ) && is_string( $_GET['locationId'] )
+			? substr( preg_replace( '/[^A-Za-z0-9_-]/', '', wp_unslash( $_GET['locationId'] ) ), 0, 64 )
+			: '';
+
 		if ( $err ) {
 			aqm_ghl_log(
 				'OAuth callback returned an error from GHL.',
@@ -307,15 +317,26 @@ class AQM_GHL_OAuth {
 			return;
 		}
 
-		// Enforce the optional sub-account lock. GHL only reveals which
-		// sub-account was chosen in the token response, so this is the earliest
-		// we can reject a wrong pick — and we do it BEFORE store_tokens() so a
-		// mismatched install never clobbers an existing good connection. Fails
-		// OPEN when GHL returns no locationId (some exchanges omit it, hence the
-		// store_tokens fallback): we must never block a valid connect we simply
-		// cannot verify — only a CONFIRMED different sub-account is rejected.
+		// Resolve which sub-account this install actually landed on. GHL usually
+		// puts it in the token response, but some exchanges omit it — fall back to
+		// the locationId on the callback URL, then to the ID baked into the access
+		// token JWT. This single resolved value feeds both the sub-account lock
+		// check and store_tokens(), so a connection can never be saved without it
+		// when it's knowable.
+		$actual_loc = isset( $result['locationId'] ) ? (string) $result['locationId'] : '';
+		if ( '' === $actual_loc && '' !== $loc_param ) {
+			$actual_loc = $loc_param;
+		}
+		if ( '' === $actual_loc && ! empty( $result['access_token'] ) ) {
+			$actual_loc = self::location_id_from_token( (string) $result['access_token'] );
+		}
+
+		// Enforce the optional sub-account lock. We do it BEFORE store_tokens() so
+		// a mismatched install never clobbers an existing good connection. Fails
+		// OPEN when we can't determine the sub-account at all (no locationId from
+		// any source): we must never block a valid connect we simply cannot
+		// verify — only a CONFIRMED different sub-account is rejected.
 		if ( '' !== $expected_loc ) {
-			$actual_loc = isset( $result['locationId'] ) ? (string) $result['locationId'] : '';
 			if ( '' !== $actual_loc && $expected_loc !== $actual_loc ) {
 				aqm_ghl_log(
 					'OAuth install rejected: chosen sub-account did not match the expected lock.',
@@ -334,7 +355,7 @@ class AQM_GHL_OAuth {
 			}
 		}
 
-		$this->store_tokens( $result );
+		$this->store_tokens( $result, $actual_loc );
 		$this->redirect_to_settings( 'connected' );
 	}
 
@@ -415,9 +436,12 @@ class AQM_GHL_OAuth {
 	/**
 	 * Persist tokens from a fresh exchange or refresh into plugin settings.
 	 *
-	 * @param array $token_response Decoded JSON from /oauth/token.
+	 * @param array  $token_response Decoded JSON from /oauth/token.
+	 * @param string $location_hint  Optional sub-account ID resolved by the caller
+	 *                               (e.g. from the callback's locationId param) to
+	 *                               use when the token response omits it.
 	 */
-	private function store_tokens( $token_response ) {
+	private function store_tokens( $token_response, $location_hint = '' ) {
 		$settings = get_option( AQM_GHL_OPTION_KEY, array() );
 		if ( ! is_array( $settings ) ) {
 			$settings = array();
@@ -428,9 +452,25 @@ class AQM_GHL_OAuth {
 		$settings['oauth_access_token']      = (string) $token_response['access_token'];
 		$settings['oauth_refresh_token']     = isset( $token_response['refresh_token'] ) ? (string) $token_response['refresh_token'] : ( isset( $settings['oauth_refresh_token'] ) ? $settings['oauth_refresh_token'] : '' );
 		$settings['oauth_token_expires_at']  = time() + $expires_in;
-		$settings['oauth_location_id']       = isset( $token_response['locationId'] ) ? (string) $token_response['locationId'] : ( isset( $settings['oauth_location_id'] ) ? $settings['oauth_location_id'] : '' );
 		$settings['oauth_user_id']           = isset( $token_response['userId'] )     ? (string) $token_response['userId']     : ( isset( $settings['oauth_user_id'] )     ? $settings['oauth_user_id']     : '' );
 		$settings['oauth_connected_at']      = current_time( 'mysql' );
+
+		// Resolve the sub-account (location) ID from the most reliable source
+		// available: the token response, then the caller's hint (callback param),
+		// then the ID embedded in the access token JWT, then any previously-stored
+		// value. Never let a successful connect overwrite a known location with an
+		// empty one — that was the root cause of "connected but nothing sends".
+		$resolved_loc = isset( $token_response['locationId'] ) ? (string) $token_response['locationId'] : '';
+		if ( '' === $resolved_loc && '' !== (string) $location_hint ) {
+			$resolved_loc = (string) $location_hint;
+		}
+		if ( '' === $resolved_loc ) {
+			$resolved_loc = self::location_id_from_token( $settings['oauth_access_token'] );
+		}
+		if ( '' === $resolved_loc && ! empty( $settings['oauth_location_id'] ) ) {
+			$resolved_loc = (string) $settings['oauth_location_id'];
+		}
+		$settings['oauth_location_id'] = $resolved_loc;
 
 		// First-time connect or unchanged Location: try to backfill the
 		// human-readable location name via a one-shot GET /locations/{id} call.
@@ -670,6 +710,91 @@ class AQM_GHL_OAuth {
 	 */
 	public static function invalidate_verification_cache() {
 		delete_transient( self::VERIFY_TRANSIENT );
+	}
+
+	/**
+	 * Extract the sub-account (location) ID embedded in a GHL OAuth access token.
+	 *
+	 * GHL access tokens are JWTs whose payload carries the sub-account in
+	 * `authClassId` (with `authClass` = "Location"). This is the last-resort
+	 * source for the location ID when neither the token response nor the OAuth
+	 * callback supplied one — which otherwise leaves the plugin "connected" with
+	 * no idea which sub-account to send leads to. We only trust the ID for a
+	 * Location-class token: an Agency/Company token's authClassId is the company,
+	 * not a sub-account.
+	 *
+	 * @param string $access_token JWT access token.
+	 * @return string Location ID, or '' if it can't be extracted.
+	 */
+	private static function location_id_from_token( $access_token ) {
+		$parts = explode( '.', (string) $access_token );
+		if ( count( $parts ) < 2 ) {
+			return '';
+		}
+		$payload = json_decode( self::b64url_decode( $parts[1] ), true );
+		if ( ! is_array( $payload ) ) {
+			return '';
+		}
+		$class = isset( $payload['authClass'] ) ? (string) $payload['authClass'] : '';
+		$id    = isset( $payload['authClassId'] ) ? (string) $payload['authClassId'] : '';
+		if ( '' !== $id && ( '' === $class || 0 === strcasecmp( $class, 'Location' ) ) ) {
+			return $id;
+		}
+		return '';
+	}
+
+	/**
+	 * The connected sub-account (location) ID. Returns the stored value, and if
+	 * that's missing but we have a working access token, backfills it from the
+	 * token's JWT and persists it — so sites that connected before this fix (and
+	 * ended up with tokens but no location) self-heal on the next request without
+	 * a reconnect. Returns '' only when the ID genuinely can't be determined.
+	 *
+	 * @return string
+	 */
+	public static function location_id() {
+		$settings = aqm_ghl_get_settings();
+		$stored   = isset( $settings['oauth_location_id'] ) ? (string) $settings['oauth_location_id'] : '';
+		if ( '' !== $stored ) {
+			return $stored;
+		}
+
+		$access = isset( $settings['oauth_access_token'] ) ? (string) $settings['oauth_access_token'] : '';
+		if ( '' === $access ) {
+			return '';
+		}
+
+		$resolved = self::location_id_from_token( $access );
+		if ( '' === $resolved ) {
+			return '';
+		}
+
+		// Persist so dependent calls (sending leads, fetching the location name,
+		// the test panel) stop coming up empty.
+		$opt = get_option( AQM_GHL_OPTION_KEY, array() );
+		if ( ! is_array( $opt ) ) {
+			$opt = array();
+		}
+		$opt['oauth_location_id'] = $resolved;
+		update_option( AQM_GHL_OPTION_KEY, $opt, false );
+		wp_cache_delete( AQM_GHL_OPTION_KEY, 'options' );
+		wp_cache_delete( 'alloptions', 'options' );
+
+		return $resolved;
+	}
+
+	/**
+	 * The OAuth connection is genuinely usable: the tokens verify AND we know
+	 * which sub-account to talk to. This is what the UI should mean by
+	 * "Connected" — it mirrors what aqm_ghl_get_active_auth() can actually
+	 * resolve, so the status badge can never claim "Connected" while real sends
+	 * would fail for lack of a sub-account.
+	 *
+	 * @param bool $force_fresh Skip the verification cache and re-verify now.
+	 * @return bool
+	 */
+	public static function is_ready( $force_fresh = false ) {
+		return self::is_truly_connected( $force_fresh ) && '' !== self::location_id();
 	}
 
 	/**

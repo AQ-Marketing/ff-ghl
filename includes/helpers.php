@@ -74,7 +74,12 @@ if ( ! function_exists( 'aqm_ghl_get_active_auth' ) ) {
 				if ( is_wp_error( $token ) ) {
 					$oauth_error = $token;
 				} else {
-					$location_id = isset( $settings['oauth_location_id'] ) ? (string) $settings['oauth_location_id'] : '';
+					// Resolve via the self-healing accessor so a site connected before
+					// the location-ID fix (tokens stored, but no sub-account) backfills
+					// the ID from the access token JWT and sends instead of erroring.
+					$location_id = class_exists( 'AQM_GHL_OAuth' )
+						? AQM_GHL_OAuth::location_id()
+						: ( isset( $settings['oauth_location_id'] ) ? (string) $settings['oauth_location_id'] : '' );
 					if ( '' === $location_id ) {
 						$oauth_error = new \WP_Error( 'oauth_no_location', 'OAuth-connected but no location ID stored — reconnect to GoHighLevel.' );
 					} else {
