@@ -134,6 +134,27 @@
 			});
 		}
 
+		// Copy the connection-diagnostics report to the clipboard.
+		const $copyDiag = $('#aqm-ghl-copy-diag');
+		if ($copyDiag.length) {
+			$copyDiag.on('click', function (e) {
+				e.preventDefault();
+				const $text = $('#aqm-ghl-diag-text');
+				const done = () => { $('#aqm-ghl-copy-diag-done').stop(true, true).show().delay(2500).fadeOut(); };
+				const fallback = () => {
+					$text.trigger('focus');
+					$text[0].select();
+					try { document.execCommand('copy'); } catch (err) {}
+					done();
+				};
+				if (navigator.clipboard && navigator.clipboard.writeText) {
+					navigator.clipboard.writeText($text.val()).then(done).catch(fallback);
+				} else {
+					fallback();
+				}
+			});
+		}
+
 		// ---- Backfill / resend past submissions to GoHighLevel ----
 		const $bfForm = $('#aqm-ghl-bf-form');
 		if ($bfForm.length) {

@@ -124,6 +124,36 @@ if ( ! function_exists( 'aqm_ghl_get_active_auth' ) ) {
 	}
 }
 
+if ( ! function_exists( 'aqm_ghl_connection_state' ) ) {
+	/**
+	 * Single source of truth for the admin connection UI: can the plugin actually
+	 * deliver a lead to GoHighLevel right now? This mirrors exactly what the live
+	 * send path uses (aqm_ghl_get_active_auth), so the status badge can never say
+	 * "lost" while submissions are in fact going through — and vice-versa. It also
+	 * reports whether OAuth tokens exist and, if so, whether they're a sub-account
+	 * ("Location") token or an agency ("Company") token that can't send for a
+	 * location, so the UI can give a specific, actionable message.
+	 *
+	 * @return array{
+	 *   can_send:bool, mode:string, location_id:string,
+	 *   has_oauth_tokens:bool, oauth_class:string, error:string
+	 * }
+	 */
+	function aqm_ghl_connection_state() {
+		$auth     = aqm_ghl_get_active_auth();
+		$can_send = ! is_wp_error( $auth );
+
+		return array(
+			'can_send'         => $can_send,
+			'mode'             => ( $can_send && isset( $auth['mode'] ) ) ? (string) $auth['mode'] : '',
+			'location_id'      => ( $can_send && isset( $auth['location_id'] ) ) ? (string) $auth['location_id'] : '',
+			'has_oauth_tokens' => class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected(),
+			'oauth_class'      => class_exists( 'AQM_GHL_OAuth' ) ? AQM_GHL_OAuth::token_auth_class() : '',
+			'error'            => $can_send ? '' : $auth->get_error_message(),
+		);
+	}
+}
+
 if ( ! function_exists( 'aqm_ghl_get_settings' ) ) {
 	/**
 	 * Retrieve plugin settings with defaults.

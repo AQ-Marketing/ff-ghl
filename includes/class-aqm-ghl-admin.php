@@ -193,15 +193,16 @@ class AQM_GHL_Admin {
 		// sub-account can't actually send leads, so they read as "lost" (reconnect)
 		// rather than falsely green. This keeps the badge in agreement with the
 		// Test connection panel below, which has always required a sub-account.
-		$eyebrow_oauth_ok   = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_ready();
-		$eyebrow_oauth_has  = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
-		$eyebrow_pit_ok     = ! empty( $settings['location_id'] ) && ! empty( $settings['private_token'] );
+		$conn_state         = function_exists( 'aqm_ghl_connection_state' ) ? aqm_ghl_connection_state() : array( 'can_send' => false, 'has_oauth_tokens' => false, 'oauth_class' => '', 'mode' => '' );
+		$eyebrow_can_send   = ! empty( $conn_state['can_send'] );
+		$eyebrow_oauth_has  = ! empty( $conn_state['has_oauth_tokens'] );
+		$eyebrow_agency     = ( 'Company' === ( isset( $conn_state['oauth_class'] ) ? $conn_state['oauth_class'] : '' ) );
 		$eyebrow_loc_name   = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
 
-		if ( $eyebrow_oauth_ok || $eyebrow_pit_ok ) {
+		if ( $eyebrow_can_send ) {
 			$eyebrow_state = 'connected';
 		} elseif ( $eyebrow_oauth_has ) {
-			$eyebrow_state = 'lost'; // tokens stored but verification failed
+			$eyebrow_state = 'lost'; // tokens stored but can't resolve a usable send path
 		} else {
 			$eyebrow_state = 'disconnected';
 		}
@@ -502,27 +503,15 @@ class AQM_GHL_Admin {
 						// Show which sub-account this test will actually hit, so it's obvious the
 						// site is wired to the right GHL location before sending. Derived without a
 						// network call — mirrors aqm_ghl_get_active_auth()'s resolution order.
-						$test_mode   = function_exists( 'aqm_ghl_get_auth_mode' ) ? aqm_ghl_get_auth_mode() : 'pit';
-						$test_loc_id = '';
+						$test_state  = function_exists( 'aqm_ghl_connection_state' ) ? aqm_ghl_connection_state() : array( 'can_send' => false, 'mode' => '', 'location_id' => '' );
+						$test_ready  = ! empty( $test_state['can_send'] ); // mirrors the real send path
+						$test_mode   = isset( $test_state['mode'] ) ? (string) $test_state['mode'] : '';
+						$test_loc_id = isset( $test_state['location_id'] ) ? (string) $test_state['location_id'] : '';
 						$test_loc_nm = '';
-						$test_ready  = false;
 						if ( 'oauth' === $test_mode ) {
-							// Resolve via the self-healing accessor (backfills a missing
-							// location ID from the access token JWT) rather than reading the
-							// raw setting, so a site connected before the location-ID fix
-							// shows "connected" here without needing a reconnect.
-							$test_loc_id = class_exists( 'AQM_GHL_OAuth' ) ? AQM_GHL_OAuth::location_id() : '';
 							$test_loc_nm = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
-							$test_ready  = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected() && '' !== $test_loc_id;
-						} else {
-							$test_loc_id = isset( $settings['location_id'] ) ? (string) $settings['location_id'] : '';
-							if ( '' === $test_loc_id && ! empty( $settings['locations'][0]['location_id'] ) ) {
-								$test_loc_id = (string) $settings['locations'][0]['location_id'];
-							}
-							if ( ! empty( $settings['locations'][0]['name'] ) ) {
-								$test_loc_nm = (string) $settings['locations'][0]['name'];
-							}
-							$test_ready = ( '' !== $test_loc_id );
+						} elseif ( ! empty( $settings['locations'][0]['name'] ) ) {
+							$test_loc_nm = (string) $settings['locations'][0]['name'];
 						}
 						?>
 						<?php if ( $test_ready ) : ?>
@@ -575,10 +564,122 @@ class AQM_GHL_Admin {
 					</div>
 				</details>
 
+				<?php $this->render_diagnostics_panel( $settings ); ?>
+
 			</form>
 
 			<?php $this->render_backfill_section( $settings, $forms ); ?>
 		</div>
+		<?php
+	}
+
+	/**
+	 * Render a "Connection diagnostics" panel — a copy-paste, plain-language
+	 * snapshot of the OAuth connection state (token presence, expiry, last
+	 * auto-renewal outcome and WHY it failed, last submission). Contains NO token
+	 * values — only presence/lengths and non-secret reasons — so it's safe to
+	 * share. This is what lets us diagnose recurring "connection lost" issues
+	 * without server log access.
+	 *
+	 * @param array $settings Current plugin settings.
+	 */
+	private function render_diagnostics_panel( $settings ) {
+		$has_oauth = class_exists( 'AQM_GHL_OAuth' );
+
+		$access   = isset( $settings['oauth_access_token'] ) ? (string) $settings['oauth_access_token'] : '';
+		$refresh  = isset( $settings['oauth_refresh_token'] ) ? (string) $settings['oauth_refresh_token'] : '';
+		$secret   = isset( $settings['oauth_client_secret'] ) ? (string) $settings['oauth_client_secret'] : '';
+		$exp      = isset( $settings['oauth_token_expires_at'] ) ? (int) $settings['oauth_token_expires_at'] : 0;
+		$loc_id   = $has_oauth ? AQM_GHL_OAuth::location_id() : ( isset( $settings['oauth_location_id'] ) ? (string) $settings['oauth_location_id'] : '' );
+		$loc_name = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
+		$conn_at  = isset( $settings['oauth_connected_at'] ) ? (string) $settings['oauth_connected_at'] : '';
+		$mode     = function_exists( 'aqm_ghl_get_auth_mode' ) ? aqm_ghl_get_auth_mode() : 'pit';
+
+		// Human-friendly expiry (absolute UTC + relative to now).
+		$now = time();
+		if ( $exp > 0 ) {
+			$delta = $exp - $now;
+			$abs   = gmdate( 'Y-m-d H:i:s', $exp ) . ' UTC';
+			if ( $delta >= 0 ) {
+				$rel = sprintf( 'expires in %s', human_time_diff( $now, $exp ) );
+			} else {
+				$rel = sprintf( 'EXPIRED %s ago', human_time_diff( $exp, $now ) );
+			}
+			$exp_str = $abs . ' (' . $rel . ')';
+		} else {
+			$exp_str = '(none stored)';
+		}
+
+		$diag        = $has_oauth ? AQM_GHL_OAuth::get_diag() : array();
+		$last_refresh = isset( $diag['last_refresh'] ) && is_array( $diag['last_refresh'] ) ? $diag['last_refresh'] : array();
+		$last_store   = isset( $diag['last_store'] ) && is_array( $diag['last_store'] ) ? $diag['last_store'] : array();
+
+		$last_sub = function_exists( 'aqm_ghl_get_last_submission_result' ) ? aqm_ghl_get_last_submission_result() : array();
+
+		$yn = function ( $v ) {
+			return $v ? 'yes' : 'NO';
+		};
+		$kv = function ( $arr ) {
+			if ( empty( $arr ) ) {
+				return '(never)';
+			}
+			$parts = array();
+			foreach ( $arr as $k => $v ) {
+				if ( is_bool( $v ) ) {
+					$v = $v ? 'yes' : 'no';
+				}
+				$parts[] = $k . '=' . ( is_scalar( $v ) ? (string) $v : wp_json_encode( $v ) );
+			}
+			return implode( '  ', $parts );
+		};
+
+		$lines   = array();
+		$lines[] = 'AQM GHL — Connection diagnostics';
+		$lines[] = 'Generated: ' . gmdate( 'Y-m-d H:i:s' ) . ' UTC';
+		$lines[] = 'Plugin version: ' . AQM_GHL_CONNECTOR_VERSION;
+		$lines[] = 'Site: ' . home_url();
+		$lines[] = '';
+		$lines[] = 'Auth mode: ' . $mode;
+		$lines[] = 'Client secret saved: ' . $yn( '' !== $secret ) . ( '' !== $secret ? ' (…' . substr( $secret, -4 ) . ', len ' . strlen( $secret ) . ')' : '' );
+		$lines[] = 'Access token stored: ' . $yn( '' !== $access ) . ( '' !== $access ? ' (len ' . strlen( $access ) . ')' : '' );
+		$lines[] = 'Refresh token stored: ' . $yn( '' !== $refresh ) . ( '' !== $refresh ? ' (len ' . strlen( $refresh ) . ')' : '   <-- if NO, the connection cannot auto-renew' );
+		$lines[] = 'Access token expiry: ' . $exp_str;
+		$lines[] = 'Sub-account (location) id: ' . ( '' !== $loc_id ? $loc_id : '(none resolved)' );
+		$lines[] = 'Sub-account name: ' . ( '' !== $loc_name ? $loc_name : '(unknown)' );
+		$lines[] = 'Connected at: ' . ( '' !== $conn_at ? $conn_at : '(unknown)' );
+		$lines[] = '';
+		$lines[] = 'Last token store: ' . $kv( $last_store );
+		$lines[] = 'Last auto-renewal: ' . $kv( $last_refresh );
+		$lines[] = '';
+		if ( ! empty( $last_sub ) ) {
+			$lines[] = 'Last submission attempt: ' . ( ! empty( $last_sub['timestamp'] ) ? $last_sub['timestamp'] : '(none)' )
+				. ' — ' . ( ! empty( $last_sub['success'] ) ? 'SUCCESS' : 'failed' )
+				. ' (HTTP ' . ( isset( $last_sub['status'] ) ? (int) $last_sub['status'] : 0 ) . ')';
+			if ( ! empty( $last_sub['message'] ) ) {
+				$lines[] = '  message: ' . $last_sub['message'];
+			}
+			if ( ! empty( $last_sub['context']['source'] ) ) {
+				$lines[] = '  source: ' . $last_sub['context']['source'];
+			}
+		} else {
+			$lines[] = 'Last submission attempt: (none recorded)';
+		}
+
+		$report = implode( "\n", $lines );
+		?>
+		<details style="margin: 1em 0; border: 1px solid #dcdcde; background: #fff;">
+			<summary style="cursor: pointer; padding: 10px 14px; background: #f6f7f7; font-weight: 600;">
+				<?php esc_html_e( 'Connection diagnostics', 'aqm-ghl' ); ?>
+			</summary>
+			<div style="padding: 12px 18px;">
+				<p><?php esc_html_e( 'A safe, copy-paste snapshot of the GoHighLevel connection — what’s stored, when the login expires, and why the last auto-renewal succeeded or failed. It contains no passwords or tokens. If support asks, click Copy and paste it to them.', 'aqm-ghl' ); ?></p>
+				<p>
+					<button type="button" class="button button-secondary" id="aqm-ghl-copy-diag"><?php esc_html_e( 'Copy diagnostics', 'aqm-ghl' ); ?></button>
+					<span id="aqm-ghl-copy-diag-done" style="display:none; margin-left: 10px; color: #0a4f1c;"><?php esc_html_e( 'Copied ✓', 'aqm-ghl' ); ?></span>
+				</p>
+				<textarea id="aqm-ghl-diag-text" readonly rows="18" style="width: 100%; font-family: monospace; font-size: 12px; white-space: pre;"><?php echo esc_textarea( $report ); ?></textarea>
+			</div>
+		</details>
 		<?php
 	}
 
@@ -922,11 +1023,15 @@ class AQM_GHL_Admin {
 		// tokens exist but verification fails (revoked app, rotated secret,
 		// deleted sub-account, etc.) we show a "Connection lost" state with
 		// a fresh Connect button instead of falsely claiming connected status.
-		$has_tokens       = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_connected();
-		$is_connected     = class_exists( 'AQM_GHL_OAuth' ) && AQM_GHL_OAuth::is_ready();
-		$tokens_broken    = $has_tokens && ! $is_connected;
+		$state            = function_exists( 'aqm_ghl_connection_state' ) ? aqm_ghl_connection_state() : array( 'can_send' => false, 'mode' => '', 'has_oauth_tokens' => false, 'oauth_class' => '', 'location_id' => '' );
+		$can_send         = ! empty( $state['can_send'] );
+		$active_send_mode = isset( $state['mode'] ) ? (string) $state['mode'] : '';
+		$has_tokens       = ! empty( $state['has_oauth_tokens'] );
+		$is_agency_token  = ( 'Company' === ( isset( $state['oauth_class'] ) ? $state['oauth_class'] : '' ) );
+		$is_connected     = $can_send; // green 'Connected' card whenever leads can be delivered (matches the top badge)
+		$tokens_broken    = $has_tokens && ! $can_send; // OAuth tokens exist but nothing can send
 		$location_name    = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
-		$location_id      = isset( $settings['oauth_location_id'] )   ? (string) $settings['oauth_location_id']   : '';
+		$location_id      = ( '' !== (string) ( isset( $state['location_id'] ) ? $state['location_id'] : '' ) ) ? (string) $state['location_id'] : ( isset( $settings['oauth_location_id'] ) ? (string) $settings['oauth_location_id'] : '' );
 		$expires_at       = isset( $settings['oauth_token_expires_at'] ) ? (int) $settings['oauth_token_expires_at'] : 0;
 		$active_mode      = function_exists( 'aqm_ghl_get_auth_mode' ) ? aqm_ghl_get_auth_mode() : 'pit';
 		?>
@@ -983,6 +1088,11 @@ class AQM_GHL_Admin {
 							}
 							?>
 						</div>
+						<?php if ( $is_agency_token ) : ?>
+							<div style="margin-top: 8px; padding: 8px 10px; background: #fffbeb; border-left: 3px solid #d39e00; font-size: 12px; color: #50575e;">
+								<?php esc_html_e( 'Heads up: your one-click GoHighLevel app is linked at the agency level, so leads are being delivered with your saved key instead. To use the app directly, click Reconnect and choose this sub-account — not the agency.', 'aqm-ghl' ); ?>
+							</div>
+						<?php endif; ?>
 					</div>
 					<div>
 						<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: inline-block;">
@@ -1013,8 +1123,13 @@ class AQM_GHL_Admin {
 				     rotated company client_secret, or the sub-account being deleted on GHL. -->
 				<div class="notice notice-error" style="margin: 1em 0;">
 					<p>
-						<strong><?php esc_html_e( 'GoHighLevel connection lost.', 'aqm-ghl' ); ?></strong>
-						<?php esc_html_e( 'Stored credentials are no longer valid (the app may have been revoked or the secret rotated). Click Connect below to re-authorize.', 'aqm-ghl' ); ?>
+						<?php if ( $is_agency_token ) : ?>
+							<strong><?php esc_html_e( 'Connected at the agency level — pick a sub-account.', 'aqm-ghl' ); ?></strong>
+							<?php esc_html_e( 'The GoHighLevel app was authorized for your agency, which has no sub-account to send leads to, and no fallback key is configured. Click Connect and choose the specific sub-account (not the agency).', 'aqm-ghl' ); ?>
+						<?php else : ?>
+							<strong><?php esc_html_e( 'GoHighLevel connection lost.', 'aqm-ghl' ); ?></strong>
+							<?php esc_html_e( 'Stored credentials are no longer valid (the app may have been revoked or the secret rotated). Click Connect below to re-authorize.', 'aqm-ghl' ); ?>
+						<?php endif; ?>
 					</p>
 				</div>
 			<?php endif; ?>

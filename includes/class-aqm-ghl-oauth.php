@@ -503,6 +503,20 @@ class AQM_GHL_OAuth {
 		// write (the stale-read window that otherwise made the first render lie).
 		set_transient( self::VERIFY_TRANSIENT, '1', 5 * MINUTE_IN_SECONDS );
 
+		// Diagnostics: record the SHAPE of what we just stored (no token values).
+		// `refresh_token_stored` is the key signal — if it's ever false, the
+		// connection can't auto-renew and will die when the access token expires.
+		self::record_diag_event(
+			'store',
+			array(
+				'refresh_token_stored'  => ! empty( $settings['oauth_refresh_token'] ),
+				'refresh_in_response'   => ! empty( $token_response['refresh_token'] ),
+				'location_id_stored'    => ! empty( $settings['oauth_location_id'] ),
+				'location_in_response'  => ! empty( $token_response['locationId'] ),
+				'expires_in'            => $expires_in,
+			)
+		);
+
 		// Forced diagnostic (writes to wp-content/aqm-ghl-diag.log regardless of
 		// the debug-logging toggle) so we can confirm what the token endpoint
 		// returned and that the write actually stuck — without ever logging the
@@ -564,6 +578,14 @@ class AQM_GHL_OAuth {
 		$client_secret = isset( $settings['oauth_client_secret'] ) ? (string) $settings['oauth_client_secret'] : '';
 
 		if ( '' === $refresh || '' === $client_secret ) {
+			self::record_diag_event(
+				'refresh_missing',
+				array(
+					'has_refresh_token' => ( '' !== $refresh ),
+					'has_client_secret' => ( '' !== $client_secret ),
+					'detail'            => 'Nothing to refresh with — the connection cannot auto-renew and will need a reconnect once the access token expires.',
+				)
+			);
 			return new \WP_Error( 'oauth_missing_refresh', 'No refresh token or client_secret available — reconnect required.' );
 		}
 
@@ -598,11 +620,25 @@ class AQM_GHL_OAuth {
 				'OAuth refresh failed.',
 				array( 'status' => $code_resp, 'message' => $msg )
 			);
+			self::record_diag_event(
+				'refresh_fail',
+				array(
+					'http'    => (int) $code_resp,
+					'message' => mb_substr( (string) $msg, 0, 300 ),
+				)
+			);
 			return new \WP_Error( 'oauth_refresh_failed', sprintf( 'Refresh failed (HTTP %d): %s', (int) $code_resp, $msg ) );
 		}
 
 		$this->store_tokens( $body );
 		aqm_ghl_log( 'OAuth tokens refreshed successfully.', array( 'expires_in' => isset( $body['expires_in'] ) ? (int) $body['expires_in'] : 0 ) );
+		self::record_diag_event(
+			'refresh_ok',
+			array(
+				'expires_in'         => isset( $body['expires_in'] ) ? (int) $body['expires_in'] : 0,
+				'rotated_refresh'    => ! empty( $body['refresh_token'] ), // did GHL hand back a NEW refresh token to store?
+			)
+		);
 		return true;
 	}
 
@@ -743,6 +779,49 @@ class AQM_GHL_OAuth {
 	}
 
 	/**
+	 * Option key holding non-secret connection diagnostics (last refresh outcome,
+	 * last token-store shape). Stored separately from the main settings so it can
+	 * never bloat or trip the settings auto-reset guard. Contains NO token values.
+	 */
+	const DIAG_OPTION = 'aqm_ghl_oauth_diag';
+
+	/**
+	 * Record a non-secret connection event for the admin diagnostics readout, so
+	 * we can see WHY auto-renewal fails (missing refresh token vs invalid_grant vs
+	 * a revoked app) without needing server log access. Never stores token values.
+	 *
+	 * @param string $event One of: store | refresh_ok | refresh_fail | refresh_missing.
+	 * @param array  $data  Non-secret detail (booleans, ints, short messages).
+	 */
+	public static function record_diag_event( $event, $data = array() ) {
+		$diag = get_option( self::DIAG_OPTION, array() );
+		if ( ! is_array( $diag ) ) {
+			$diag = array();
+		}
+		$entry = array_merge(
+			array( 'event' => (string) $event, 'at' => gmdate( 'Y-m-d H:i:s' ) . ' UTC' ),
+			is_array( $data ) ? $data : array()
+		);
+		$diag['last_event'] = $entry;
+		if ( 0 === strpos( $event, 'refresh' ) ) {
+			$diag['last_refresh'] = $entry;
+		} elseif ( 'store' === $event ) {
+			$diag['last_store'] = $entry;
+		}
+		update_option( self::DIAG_OPTION, $diag, false );
+	}
+
+	/**
+	 * Read the stored connection diagnostics (see record_diag_event).
+	 *
+	 * @return array
+	 */
+	public static function get_diag() {
+		$diag = get_option( self::DIAG_OPTION, array() );
+		return is_array( $diag ) ? $diag : array();
+	}
+
+	/**
 	 * Extract the sub-account (location) ID embedded in a GHL OAuth access token.
 	 *
 	 * GHL access tokens are JWTs whose payload carries the sub-account in
@@ -769,6 +848,41 @@ class AQM_GHL_OAuth {
 		$id    = isset( $payload['authClassId'] ) ? (string) $payload['authClassId'] : '';
 		if ( '' !== $id && ( '' === $class || 0 === strcasecmp( $class, 'Location' ) ) ) {
 			return $id;
+		}
+		return '';
+	}
+
+	/**
+	 * The authorization class of the stored OAuth access token, decoded from the
+	 * JWT: 'Location' (a sub-account token — what this plugin needs), 'Company'
+	 * (an agency/company token — has no sub-account, so it can't send for a
+	 * location), or '' if there's no token / it can't be decoded.
+	 *
+	 * Used to give a SPECIFIC message when someone connects at the agency level
+	 * instead of picking a sub-account, rather than a generic "connection lost".
+	 *
+	 * @return string 'Location' | 'Company' | '' (other/unknown).
+	 */
+	public static function token_auth_class() {
+		$settings = aqm_ghl_get_settings();
+		$access   = isset( $settings['oauth_access_token'] ) ? (string) $settings['oauth_access_token'] : '';
+		if ( '' === $access ) {
+			return '';
+		}
+		$parts = explode( '.', $access );
+		if ( count( $parts ) < 2 ) {
+			return '';
+		}
+		$payload = json_decode( self::b64url_decode( $parts[1] ), true );
+		if ( ! is_array( $payload ) || empty( $payload['authClass'] ) ) {
+			return '';
+		}
+		$class = (string) $payload['authClass'];
+		if ( 0 === strcasecmp( $class, 'Location' ) ) {
+			return 'Location';
+		}
+		if ( 0 === strcasecmp( $class, 'Company' ) || 0 === strcasecmp( $class, 'Agency' ) ) {
+			return 'Company';
 		}
 		return '';
 	}
