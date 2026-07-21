@@ -469,7 +469,7 @@ class AQM_GHL_Handler {
 				$handled[ (int) $mapped_fid ] = true;
 			}
 		}
-		$cf = isset( $settings['custom_fields'][ $form_id ] ) && is_array( $settings['custom_fields'][ $form_id ] ) ? $settings['custom_fields'][ $form_id ] : array();
+		$cf = $this->get_effective_custom_fields( $settings, $form_id );
 		foreach ( $cf as $row ) {
 			if ( ! empty( $row['form_field_id'] ) ) {
 				$handled[ (int) $row['form_field_id'] ] = true;
@@ -536,6 +536,63 @@ class AQM_GHL_Handler {
 	}
 
 	/**
+	 * Resolve the effective GHL custom-field mapping for a form: the admin-saved
+	 * rows merged with any GHL custom field auto-matched to a form field by label.
+	 *
+	 * Admin-configured rows always win; auto-matched rows only fill gaps, and never
+	 * double-map the same GHL destination or the same form field. This is what lets
+	 * custom fields flow automatically for every enabled form without anyone opening
+	 * the settings page — the save-time auto-map (sanitize_settings) and this
+	 * send-time auto-map use the exact same matcher, so they can't disagree.
+	 *
+	 * @param array $settings Plugin settings.
+	 * @param int   $form_id  Current form ID.
+	 * @return array List of array{ghl_field_id:string, form_field_id:int}.
+	 */
+	private function get_effective_custom_fields( $settings, $form_id ) {
+		$form_id = absint( $form_id );
+
+		$stored = array();
+		if ( ! empty( $settings['custom_fields'][ $form_id ] ) && is_array( $settings['custom_fields'][ $form_id ] ) ) {
+			$stored = $settings['custom_fields'][ $form_id ];
+		}
+
+		$effective = array();
+		$have_ghl  = array();
+		$have_frm  = array();
+		foreach ( $stored as $row ) {
+			$gid  = isset( $row['ghl_field_id'] ) ? (string) $row['ghl_field_id'] : '';
+			$ffid = isset( $row['form_field_id'] ) ? (int) $row['form_field_id'] : 0;
+			if ( '' === $gid || ! $ffid ) {
+				continue;
+			}
+			$effective[]        = array( 'ghl_field_id' => $gid, 'form_field_id' => $ffid );
+			$have_ghl[ $gid ]   = true;
+			$have_frm[ $ffid ]  = true;
+		}
+
+		$auto = function_exists( 'aqm_ghl_autodetect_custom_fields_for_form' )
+			? aqm_ghl_autodetect_custom_fields_for_form( $form_id )
+			: array();
+
+		foreach ( $auto as $row ) {
+			$gid  = isset( $row['ghl_field_id'] ) ? (string) $row['ghl_field_id'] : '';
+			$ffid = isset( $row['form_field_id'] ) ? (int) $row['form_field_id'] : 0;
+			if ( '' === $gid || ! $ffid ) {
+				continue;
+			}
+			if ( isset( $have_ghl[ $gid ] ) || isset( $have_frm[ $ffid ] ) ) {
+				continue; // Respect the admin's explicit choice; don't double-map.
+			}
+			$effective[]       = array( 'ghl_field_id' => $gid, 'form_field_id' => $ffid );
+			$have_ghl[ $gid ]  = true;
+			$have_frm[ $ffid ] = true;
+		}
+
+		return $effective;
+	}
+
+	/**
 	 * Prepare custom fields payload.
 	 *
 	 * @param array $settings Plugin settings.
@@ -545,11 +602,14 @@ class AQM_GHL_Handler {
 	 * @return array
 	 */
 	private function prepare_custom_fields( $settings, $metas, $form_id ) {
-		if ( empty( $settings['custom_fields'] ) || ! is_array( $settings['custom_fields'] ) ) {
+		// Effective mapping = whatever the admin saved, PLUS any GHL custom field
+		// auto-matched to a form field by label. This makes custom fields flow for
+		// every enabled form with zero manual setup — even if the settings were
+		// never re-saved after connecting — which is the whole point.
+		$form_custom_fields = $this->get_effective_custom_fields( $settings, $form_id );
+		if ( empty( $form_custom_fields ) ) {
 			return array();
 		}
-
-		$form_custom_fields = isset( $settings['custom_fields'][ $form_id ] ) ? $settings['custom_fields'][ $form_id ] : array();
 
 		$prepared = array();
 

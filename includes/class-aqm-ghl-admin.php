@@ -893,15 +893,31 @@ class AQM_GHL_Admin {
 		}
 
 		$results = array();
+		// Some connections (legacy Private Integration tokens) can WRITE contacts
+		// but have no contacts-READ scope, so every lookup 401s. Detecting that on
+		// the first lookup lets us stop hammering the API and mark the rest
+		// "unverified" instead of showing an alarming "Couldn't check" on every row.
+		// Pushing is still safe — GHL blocks/updates duplicates on send.
+		$scope_blocked = false;
 		foreach ( $ids as $id ) {
 			$fields = aqm_ghl_get_entry_summary_fields( $id, $form_id );
 			if ( '' === $fields['email'] ) {
 				$results[] = array( 'entry_id' => $id, 'status' => 'no_email', 'contact_id' => '' );
 				continue;
 			}
+			if ( $scope_blocked ) {
+				$results[] = array( 'entry_id' => $id, 'status' => 'unverified', 'contact_id' => '' );
+				continue;
+			}
 			$lookup = aqm_ghl_find_contact_by_email( $auth['location_id'], $fields['email'], $auth['token'] );
 			if ( is_wp_error( $lookup ) ) {
-				$results[] = array( 'entry_id' => $id, 'status' => 'error', 'contact_id' => '', 'message' => $lookup->get_error_message() );
+				$emsg = $lookup->get_error_message();
+				if ( $this->is_ghl_scope_error( $emsg ) ) {
+					$scope_blocked = true;
+					$results[]     = array( 'entry_id' => $id, 'status' => 'unverified', 'contact_id' => '' );
+				} else {
+					$results[] = array( 'entry_id' => $id, 'status' => 'error', 'contact_id' => '', 'message' => $emsg );
+				}
 			} elseif ( ! empty( $lookup['found'] ) ) {
 				$results[] = array( 'entry_id' => $id, 'status' => 'in_ghl', 'contact_id' => (string) $lookup['contact_id'] );
 			} else {
@@ -910,7 +926,32 @@ class AQM_GHL_Admin {
 			usleep( 120000 ); // ~120ms between lookups — stay under GHL rate limits
 		}
 
-		wp_send_json_success( array( 'results' => $results ) );
+		$response = array( 'results' => $results );
+		if ( $scope_blocked ) {
+			$response['scope_blocked'] = true;
+			$response['scope_message'] = __( 'Can’t pre-check GoHighLevel — this site’s connection can add contacts but doesn’t have permission to read them, so we can’t tell in advance which are already there. You can still push: GoHighLevel automatically skips or updates contacts that already exist, so nothing is duplicated. (To enable the pre-check, reconnect this site to GoHighLevel, or give its token the “View Contacts” permission.)', 'aqm-ghl' );
+		}
+		wp_send_json_success( $response );
+	}
+
+	/**
+	 * Whether a GHL API error message indicates a missing OAuth/token scope
+	 * (as opposed to a transient network or server error). Used to degrade the
+	 * backfill "already in GHL?" pre-check gracefully instead of spamming errors.
+	 *
+	 * @param string $message Error message from a lookup.
+	 * @return bool
+	 */
+	private function is_ghl_scope_error( $message ) {
+		$message = strtolower( (string) $message );
+		if ( false !== strpos( $message, 'not authorized for this scope' ) ) {
+			return true;
+		}
+		if ( false !== strpos( $message, 'authclass' ) ) {
+			return true;
+		}
+		// "returned 401" / "returned 403" from aqm_ghl_find_contact_by_email().
+		return ( false !== strpos( $message, '401' ) || false !== strpos( $message, '403' ) );
 	}
 
 	/**

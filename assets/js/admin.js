@@ -197,6 +197,7 @@
 					in_ghl: ['Already in GoHighLevel', 'aqm-ghl-bf-badge--in'],
 					not_in_ghl: ['Not in GoHighLevel', 'aqm-ghl-bf-badge--out'],
 					no_email: ['No email — can’t send', 'aqm-ghl-bf-badge--na'],
+					unverified: ['Can’t pre-check', 'aqm-ghl-bf-badge--na'],
 					error: ['Couldn’t check', 'aqm-ghl-bf-badge--err'],
 					checking: ['Checking…', 'aqm-ghl-bf-badge--checking'],
 				};
@@ -250,20 +251,34 @@
 					const $tr = $(this);
 					if ($tr.find('input.aqm-ghl-bf-cb').length) { ids.push($tr.attr('data-entry')); }
 				});
+				let scopeBlocked = false;
+				let scopeMessage = '';
 				for (let i = 0; i < ids.length; i += BATCH) {
 					const batch = ids.slice(i, i + BATCH);
 					$loadStatus.text('Checking GoHighLevel ' + Math.min(i + batch.length, ids.length) + ' of ' + ids.length + '…');
 					const json = await bfPost('aqm_ghl_backfill_check', { form_id: $bfForm.val(), entry_ids: batch });
 					if (json && json.success && json.data && json.data.results) {
+						if (json.data.scope_blocked) {
+							scopeBlocked = true;
+							scopeMessage = json.data.scope_message || '';
+						}
 						json.data.results.forEach((res) => {
 							const $tr = $rows.find('tr[data-entry="' + res.entry_id + '"]');
 							$tr.find('.aqm-ghl-bf-status').html(badge(res.status));
-							if (res.status === 'not_in_ghl') { $tr.find('input.aqm-ghl-bf-cb').prop('checked', true); }
+							// Pre-select rows we know are missing, and rows we couldn't
+							// pre-check (safe: duplicates are skipped/updated on push).
+							if (res.status === 'not_in_ghl' || res.status === 'unverified') {
+								$tr.find('input.aqm-ghl-bf-cb').prop('checked', true);
+							}
 						});
 						updatePushEnabled();
 					}
 				}
-				$loadStatus.text(ids.length + ' sendable submission(s) checked. Missing ones are pre-selected — review and push.');
+				if (scopeBlocked) {
+					$loadStatus.html('<span style="color:#8a6d00;">' + escHtml(scopeMessage) + '</span>');
+				} else {
+					$loadStatus.text(ids.length + ' sendable submission(s) checked. Missing ones are pre-selected — review and push.');
+				}
 			}
 
 			$load.on('click', function (e) {
