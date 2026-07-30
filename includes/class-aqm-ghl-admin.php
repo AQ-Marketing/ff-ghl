@@ -1078,10 +1078,20 @@ class AQM_GHL_Admin {
 		?>
 
 		<?php // Status notices from the OAuth flow redirects ?>
-		<?php if ( 'connected' === $status ) : ?>
+		<?php if ( 'connected' === $status && $can_send ) : ?>
 			<div class="notice notice-success is-dismissible"><p>
 				<strong><?php esc_html_e( '✓ Connected to GoHighLevel.', 'aqm-ghl' ); ?></strong>
 				<?php esc_html_e( 'Tokens will auto-refresh — you don\'t need to reconnect.', 'aqm-ghl' ); ?>
+			</p></div>
+		<?php elseif ( 'connected' === $status && ! $can_send ) : ?>
+			<?php // Authorization succeeded and tokens were stored, but the connection can't
+			      // actually send — almost always because the app was authorized at the AGENCY
+			      // level (no sub-account). Never show the reassuring green "you don't need to
+			      // reconnect" here: it would contradict the agency / connection-lost banners below
+			      // and tell the user the opposite of what they must do. ?>
+			<div class="notice notice-warning is-dismissible"><p>
+				<strong><?php esc_html_e( 'Authorized — but no sub-account was selected.', 'aqm-ghl' ); ?></strong>
+				<?php esc_html_e( 'The GoHighLevel app was connected at the agency level, which has no sub-account to send leads to. Click Connect and choose the specific sub-account (not the agency).', 'aqm-ghl' ); ?>
 			</p></div>
 		<?php elseif ( 'disconnected' === $status ) : ?>
 			<div class="notice notice-info is-dismissible"><p>
