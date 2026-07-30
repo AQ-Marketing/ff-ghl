@@ -1200,7 +1200,7 @@ class AQM_GHL_Admin {
 						<button type="submit" class="button button-secondary"><?php esc_html_e( 'Save', 'aqm-ghl' ); ?></button>
 					</form>
 
-					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin: 0;">
+					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin: 0;" target="_blank">
 						<input type="hidden" name="action" value="aqm_oauth_start" />
 						<?php wp_nonce_field( 'aqm_oauth_start' ); ?>
 						<button type="submit" class="button button-primary" <?php disabled( ! $has_secret ); ?>>
