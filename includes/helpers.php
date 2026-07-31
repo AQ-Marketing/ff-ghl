@@ -81,13 +81,34 @@ if ( ! function_exists( 'aqm_ghl_get_active_auth' ) ) {
 						? AQM_GHL_OAuth::location_id()
 						: ( isset( $settings['oauth_location_id'] ) ? (string) $settings['oauth_location_id'] : '' );
 					if ( '' === $location_id ) {
-						$oauth_error = new \WP_Error( 'oauth_no_location', 'OAuth-connected but no location ID stored — reconnect to GoHighLevel.' );
+						$oauth_error = new \WP_Error( 'oauth_no_location', 'OAuth-connected but no sub-account selected — choose the target sub-account in settings.' );
 					} else {
-						return array(
-							'mode'        => 'oauth',
-							'token'       => $token,
-							'location_id' => $location_id,
-						);
+						// Resolve the RIGHT bearer for resource calls. A sub-account
+						// ("Location") token is used directly. An agency ("Company")
+						// token can't hit resource endpoints itself — it MUST mint a
+						// per-location token via /oauth/locationToken. Doing this here
+						// means every downstream caller (contacts, custom fields,
+						// pipelines, opportunities, backfill) transparently gets a
+						// working sub-account token with no changes of its own.
+						$auth_class = class_exists( 'AQM_GHL_OAuth' ) ? AQM_GHL_OAuth::token_auth_class() : '';
+						if ( 'Company' === $auth_class ) {
+							$loc_token = AQM_GHL_OAuth::location_token( $location_id );
+							if ( is_wp_error( $loc_token ) ) {
+								$oauth_error = $loc_token;
+							} else {
+								return array(
+									'mode'        => 'oauth',
+									'token'       => $loc_token,
+									'location_id' => $location_id,
+								);
+							}
+						} else {
+							return array(
+								'mode'        => 'oauth',
+								'token'       => $token,
+								'location_id' => $location_id,
+							);
+						}
 					}
 				}
 			}
@@ -151,6 +172,83 @@ if ( ! function_exists( 'aqm_ghl_connection_state' ) ) {
 			'oauth_class'      => class_exists( 'AQM_GHL_OAuth' ) ? AQM_GHL_OAuth::token_auth_class() : '',
 			'error'            => $can_send ? '' : $auth->get_error_message(),
 		);
+	}
+}
+
+if ( ! function_exists( 'aqm_ghl_fetch_agency_locations' ) ) {
+	/**
+	 * List the sub-accounts (locations) under the connected agency, for the
+	 * "target sub-account" picker. Best-effort: returns an empty array if the
+	 * plugin isn't OAuth-connected, isn't holding an agency token, or the agency
+	 * token lacks the scope to list locations — in which case the UI falls back to
+	 * a manual Location-ID input. Cached briefly to avoid an API call per render.
+	 *
+	 * @param bool $force Skip the cache.
+	 * @return array List of array{ id:string, name:string }.
+	 */
+	function aqm_ghl_fetch_agency_locations( $force = false ) {
+		if ( ! class_exists( 'AQM_GHL_OAuth' ) ) {
+			return array();
+		}
+		$company_id = AQM_GHL_OAuth::company_id();
+		if ( '' === $company_id ) {
+			return array();
+		}
+		$token = AQM_GHL_OAuth::token(); // Agency access token (auto-refreshes).
+		if ( is_wp_error( $token ) || '' === (string) $token ) {
+			return array();
+		}
+
+		$cache_key = 'aqm_ghl_agency_locs_' . md5( $company_id );
+		if ( ! $force ) {
+			$cached = get_transient( $cache_key );
+			if ( is_array( $cached ) ) {
+				return $cached;
+			}
+		}
+
+		$url = add_query_arg(
+			array( 'companyId' => $company_id, 'limit' => 200 ),
+			'https://services.leadconnectorhq.com/locations/search'
+		);
+		$response = wp_remote_get(
+			$url,
+			array(
+				'timeout' => 20,
+				'headers' => array(
+					'Authorization' => 'Bearer ' . $token,
+					'Version'       => '2021-07-28',
+					'Accept'        => 'application/json',
+				),
+			)
+		);
+		if ( is_wp_error( $response ) ) {
+			return array();
+		}
+		$code = wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+		if ( $code < 200 || $code >= 300 || ! is_array( $body ) || empty( $body['locations'] ) || ! is_array( $body['locations'] ) ) {
+			return array();
+		}
+		$out = array();
+		foreach ( $body['locations'] as $loc ) {
+			if ( empty( $loc['id'] ) ) {
+				continue;
+			}
+			$out[] = array(
+				'id'   => (string) $loc['id'],
+				'name' => isset( $loc['name'] ) ? (string) $loc['name'] : '',
+			);
+		}
+		// Sort by name for a friendlier dropdown.
+		usort(
+			$out,
+			function ( $a, $b ) {
+				return strcasecmp( $a['name'], $b['name'] );
+			}
+		);
+		set_transient( $cache_key, $out, 10 * MINUTE_IN_SECONDS );
+		return $out;
 	}
 }
 

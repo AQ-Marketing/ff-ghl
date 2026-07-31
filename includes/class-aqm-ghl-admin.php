@@ -1104,6 +1104,15 @@ class AQM_GHL_Admin {
 					<br><?php echo esc_html( $msg ); ?>
 				<?php endif; ?>
 			</p></div>
+		<?php elseif ( 'location_set' === $status ) : ?>
+			<div class="notice notice-success is-dismissible"><p>
+				<strong><?php esc_html_e( 'Sub-account saved.', 'aqm-ghl' ); ?></strong>
+				<?php esc_html_e( 'Leads from this site will now be delivered to the selected GoHighLevel sub-account.', 'aqm-ghl' ); ?>
+			</p></div>
+		<?php elseif ( 'location_missing' === $status ) : ?>
+			<div class="notice notice-error is-dismissible"><p>
+				<?php esc_html_e( 'Please choose a sub-account before saving.', 'aqm-ghl' ); ?>
+			</p></div>
 		<?php elseif ( '' !== $status ) : ?>
 			<div class="notice notice-error is-dismissible"><p>
 				<strong><?php esc_html_e( 'GoHighLevel connection failed.', 'aqm-ghl' ); ?></strong>
@@ -1117,6 +1126,60 @@ class AQM_GHL_Admin {
 			<div class="notice notice-error is-dismissible"><p>
 				<?php esc_html_e( 'Paste the AQM Client Secret below and save before clicking Connect.', 'aqm-ghl' ); ?>
 			</p></div>
+		<?php endif; ?>
+
+		<?php
+		// Target sub-account selector. When the plugin holds an AGENCY (Company)
+		// OAuth token, the token carries no sub-account of its own — it mints a
+		// per-location token for whichever sub-account this site targets. Let the
+		// admin choose it here (dropdown when the agency token can list locations,
+		// otherwise a manual Location-ID input). Only shown for agency tokens; a
+		// direct Location token already resolves its own sub-account.
+		if ( $has_tokens && $is_agency_token ) :
+			$agency_locations = function_exists( 'aqm_ghl_fetch_agency_locations' ) ? aqm_ghl_fetch_agency_locations() : array();
+			$needs_location   = ( '' === $location_id );
+			?>
+			<div style="margin: 1em 0; border-left: 4px solid <?php echo $needs_location ? '#d63638' : '#2271b1'; ?>; background: #fff; padding: 12px 16px; box-shadow: 0 1px 1px rgba(0,0,0,0.04);">
+				<strong style="font-size: 14px; display: block; margin-bottom: 4px;">
+					<?php esc_html_e( 'Target sub-account', 'aqm-ghl' ); ?>
+				</strong>
+				<p style="margin: 0 0 8px; color: #50575e; font-size: 12px;">
+					<?php esc_html_e( 'The app is connected at the agency level. Choose which GoHighLevel sub-account leads from this site should go to — the plugin delivers to it automatically.', 'aqm-ghl' ); ?>
+				</p>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 0;">
+					<input type="hidden" name="action" value="aqm_oauth_set_location" />
+					<?php wp_nonce_field( 'aqm_oauth_set_location' ); ?>
+					<?php if ( ! empty( $agency_locations ) ) : ?>
+						<select name="aqm_location_id" style="min-width: 280px;">
+							<option value=""><?php esc_html_e( '— Select a sub-account —', 'aqm-ghl' ); ?></option>
+							<?php foreach ( $agency_locations as $loc ) : ?>
+								<option value="<?php echo esc_attr( $loc['id'] ); ?>" <?php selected( $location_id, $loc['id'] ); ?>>
+									<?php echo esc_html( '' !== $loc['name'] ? $loc['name'] : $loc['id'] ); ?>
+								</option>
+							<?php endforeach; ?>
+						</select>
+					<?php else : ?>
+						<input type="text" name="aqm_location_id" value="<?php echo esc_attr( $location_id ); ?>" placeholder="<?php esc_attr_e( 'Sub-account Location ID', 'aqm-ghl' ); ?>" style="width: 280px; font-family: monospace; font-size: 12px;" spellcheck="false" autocomplete="off" />
+					<?php endif; ?>
+					<button type="submit" class="button button-primary"><?php esc_html_e( 'Save sub-account', 'aqm-ghl' ); ?></button>
+				</form>
+				<?php if ( '' !== $location_id ) : ?>
+					<p style="margin: 8px 0 0; color: #1a7f37; font-size: 12px;">
+						<?php
+						printf(
+							/* translators: %s: current sub-account name or ID */
+							esc_html__( 'Currently sending to: %s', 'aqm-ghl' ),
+							'<strong>' . esc_html( '' !== $location_name ? $location_name : $location_id ) . '</strong>'
+						);
+						?>
+					</p>
+				<?php endif; ?>
+				<?php if ( empty( $agency_locations ) ) : ?>
+					<p style="margin: 8px 0 0; color: #50575e; font-size: 11px;">
+						<?php esc_html_e( 'Tip: a sub-account’s ID is the code in its GoHighLevel URL — app.gohighlevel.com/v2/location/THIS_ID/…', 'aqm-ghl' ); ?>
+					</p>
+				<?php endif; ?>
+			</div>
 		<?php endif; ?>
 
 		<?php if ( $is_connected ) : ?>
@@ -1140,8 +1203,8 @@ class AQM_GHL_Admin {
 							?>
 						</div>
 						<?php if ( $is_agency_token ) : ?>
-							<div style="margin-top: 8px; padding: 8px 10px; background: #fffbeb; border-left: 3px solid #d39e00; font-size: 12px; color: #50575e;">
-								<?php esc_html_e( 'Heads up: your one-click GoHighLevel app is linked at the agency level, so leads are being delivered with your saved key instead. To use the app directly, click Reconnect and choose this sub-account — not the agency.', 'aqm-ghl' ); ?>
+							<div style="margin-top: 8px; padding: 8px 10px; background: #edfaef; border-left: 3px solid #00a32a; font-size: 12px; color: #50575e;">
+								<?php esc_html_e( 'Connected at the agency level and delivering to the sub-account above (the app mints a secure per-sub-account token automatically). To change which sub-account this site sends to, use the “Target sub-account” selector above.', 'aqm-ghl' ); ?>
 							</div>
 						<?php endif; ?>
 					</div>

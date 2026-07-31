@@ -28,11 +28,83 @@ class AQM_GHL_OAuth {
 
 	const REFRESH_BUFFER_SECONDS = 300; // Refresh access_token 5 min before expiry.
 
+	// GHL endpoint that mints a short-lived sub-account (Location) token FROM an
+	// agency (Company) access token. This is the documented GHL model: an agency
+	// install holds a Company token and derives per-location tokens on demand.
+	// See the "GHL Agency vs Location Tokens" concept — a Company token cannot hit
+	// most resource endpoints directly, but it CAN mint a Location token that can.
+	const LOCATION_TOKEN_URL = 'https://services.leadconnectorhq.com/oauth/locationToken';
+
 	public function __construct() {
 		add_action( 'admin_post_aqm_oauth_start',                  array( $this, 'handle_start' ) );
 		add_action( 'wp_ajax_'        . AQM_GHL_OAUTH_CALLBACK_ACTION, array( $this, 'handle_callback' ) );
 		add_action( 'wp_ajax_nopriv_' . AQM_GHL_OAUTH_CALLBACK_ACTION, array( $this, 'handle_callback' ) );
 		add_action( 'admin_post_aqm_oauth_disconnect',             array( $this, 'handle_disconnect' ) );
+		add_action( 'admin_post_aqm_oauth_set_location',           array( $this, 'handle_set_location' ) );
+	}
+
+	/**
+	 * Handle the admin choosing which sub-account (Location) this site targets.
+	 * Relevant when the plugin holds an agency (Company) token: the token itself
+	 * carries no location, so the admin picks the sub-account and we persist it as
+	 * oauth_location_id. From then on the auth router mints a per-location token
+	 * for it on every send (see get_location_token / aqm_ghl_get_active_auth).
+	 */
+	public function handle_set_location() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( 'Unauthorized', 403 );
+		}
+		check_admin_referer( 'aqm_oauth_set_location' );
+
+		$loc = isset( $_POST['aqm_location_id'] ) && is_string( $_POST['aqm_location_id'] )
+			? substr( preg_replace( '/[^A-Za-z0-9_-]/', '', wp_unslash( $_POST['aqm_location_id'] ) ), 0, 64 )
+			: '';
+
+		if ( '' === $loc ) {
+			$this->redirect_to_settings( 'location_missing', 'Pick a sub-account first.' );
+			return;
+		}
+
+		$settings = get_option( AQM_GHL_OPTION_KEY, array() );
+		if ( ! is_array( $settings ) ) {
+			$settings = array();
+		}
+		$prev = isset( $settings['oauth_location_id'] ) ? (string) $settings['oauth_location_id'] : '';
+
+		$settings['oauth_location_id'] = $loc;
+		// A changed sub-account invalidates the cached friendly name.
+		if ( $prev !== $loc ) {
+			unset( $settings['oauth_location_name'] );
+		}
+		update_option( AQM_GHL_OPTION_KEY, $settings, false );
+		wp_cache_delete( AQM_GHL_OPTION_KEY, 'options' );
+		wp_cache_delete( 'alloptions', 'options' );
+
+		// Drop any cached location token for the old and new sub-accounts so the
+		// next send mints fresh against the correct location.
+		if ( '' !== $prev ) {
+			delete_transient( self::LOCATION_TOKEN_TRANSIENT_PREFIX . md5( $prev ) );
+		}
+		delete_transient( self::LOCATION_TOKEN_TRANSIENT_PREFIX . md5( $loc ) );
+		self::invalidate_verification_cache();
+
+		// Best-effort: backfill the sub-account's display name via a freshly minted
+		// location token. Never fatal — the ID alone is enough to send.
+		$loc_token = $this->get_location_token( $loc );
+		if ( ! is_wp_error( $loc_token ) ) {
+			$name = $this->fetch_location_name( $loc_token, $loc );
+			if ( '' !== $name ) {
+				$opt = get_option( AQM_GHL_OPTION_KEY, array() );
+				if ( is_array( $opt ) ) {
+					$opt['oauth_location_name'] = $name;
+					update_option( AQM_GHL_OPTION_KEY, $opt, false );
+					wp_cache_delete( AQM_GHL_OPTION_KEY, 'options' );
+					wp_cache_delete( 'alloptions', 'options' );
+				}
+			}
+		}
+
+		$this->redirect_to_settings( 'location_set' );
 	}
 
 	/**
@@ -928,11 +1000,141 @@ class AQM_GHL_OAuth {
 	}
 
 	/**
+	 * The agency (company) ID this OAuth connection belongs to, decoded from the
+	 * access token JWT. For a Company/Agency token this is `authClassId`; a
+	 * Location token also carries `companyId`. Needed to mint per-location tokens
+	 * via /oauth/locationToken.
+	 *
+	 * @return string Company ID, or '' if it can't be determined.
+	 */
+	public static function company_id() {
+		$settings = aqm_ghl_get_settings();
+		$access   = isset( $settings['oauth_access_token'] ) ? (string) $settings['oauth_access_token'] : '';
+		if ( '' === $access ) {
+			return '';
+		}
+		$parts = explode( '.', $access );
+		if ( count( $parts ) < 2 ) {
+			return '';
+		}
+		$payload = json_decode( self::b64url_decode( $parts[1] ), true );
+		if ( ! is_array( $payload ) ) {
+			return '';
+		}
+		$class = isset( $payload['authClass'] ) ? (string) $payload['authClass'] : '';
+		$id    = isset( $payload['authClassId'] ) ? (string) $payload['authClassId'] : '';
+		if ( '' !== $id && ( 0 === strcasecmp( $class, 'Company' ) || 0 === strcasecmp( $class, 'Agency' ) ) ) {
+			return $id;
+		}
+		// A Location token still carries the parent company in `companyId`.
+		if ( ! empty( $payload['companyId'] ) ) {
+			return (string) $payload['companyId'];
+		}
+		return '';
+	}
+
+	// Transient prefix for cached per-location (sub-account) tokens minted from
+	// the agency token. Keyed by locationId. These are short-lived (~24h) and
+	// have no refresh token of their own — we just re-derive when they expire.
+	const LOCATION_TOKEN_TRANSIENT_PREFIX = 'aqm_ghl_loc_tok_';
+
+	/**
+	 * Get a usable Location (sub-account) bearer token for a specific sub-account.
+	 *
+	 * If the stored OAuth token is already a Location token, callers use it
+	 * directly and never reach here. This handles the agency-install case: the
+	 * plugin holds a Company token and mints a per-location token from it via
+	 * POST /oauth/locationToken { companyId, locationId }. The result is cached
+	 * per location until shortly before it expires, then transparently re-derived
+	 * (there is no refresh token for location tokens — you re-mint from the agency
+	 * token, which itself auto-refreshes via get_access_token()).
+	 *
+	 * @param string $location_id Target sub-account (location) ID.
+	 * @return string|\WP_Error Location access token, or WP_Error on failure.
+	 */
+	public function get_location_token( $location_id ) {
+		$location_id = (string) $location_id;
+		if ( '' === $location_id ) {
+			return new \WP_Error( 'aqm_no_location', 'No target sub-account (location) is configured.' );
+		}
+
+		$cache_key = self::LOCATION_TOKEN_TRANSIENT_PREFIX . md5( $location_id );
+		$cached    = get_transient( $cache_key );
+		if ( is_array( $cached ) && ! empty( $cached['token'] ) && isset( $cached['expires_at'] ) && ( (int) $cached['expires_at'] - time() ) > 60 ) {
+			return (string) $cached['token'];
+		}
+
+		// Need a live agency access token to mint from (auto-refreshes if stale).
+		$agency = $this->get_access_token();
+		if ( is_wp_error( $agency ) ) {
+			return $agency;
+		}
+
+		$company_id = self::company_id();
+		if ( '' === $company_id ) {
+			return new \WP_Error( 'aqm_no_company', 'Could not determine the agency (company) ID from the OAuth token.' );
+		}
+
+		$response = wp_remote_post(
+			self::LOCATION_TOKEN_URL,
+			array(
+				'timeout' => 20,
+				'headers' => array(
+					'Authorization' => 'Bearer ' . $agency,
+					'Version'       => '2021-07-28',
+					'Accept'        => 'application/json',
+					'Content-Type'  => 'application/x-www-form-urlencoded',
+				),
+				'body'    => array(
+					'companyId'  => $company_id,
+					'locationId' => $location_id,
+				),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( $code < 200 || $code >= 300 || ! is_array( $body ) || empty( $body['access_token'] ) ) {
+			$msg = is_array( $body ) && isset( $body['message'] )
+				? ( is_array( $body['message'] ) ? implode( '; ', $body['message'] ) : $body['message'] )
+				: wp_remote_retrieve_body( $response );
+			return new \WP_Error( 'aqm_location_token_failed', sprintf( 'Could not mint a sub-account token (HTTP %d): %s', (int) $code, $msg ) );
+		}
+
+		$expires_in = isset( $body['expires_in'] ) ? (int) $body['expires_in'] : 86400;
+		set_transient(
+			$cache_key,
+			array( 'token' => (string) $body['access_token'], 'expires_at' => time() + $expires_in ),
+			max( 300, $expires_in - 120 )
+		);
+
+		return (string) $body['access_token'];
+	}
+
+	/**
+	 * Static convenience for get_location_token().
+	 *
+	 * @param string $location_id Target sub-account (location) ID.
+	 * @return string|\WP_Error
+	 */
+	public static function location_token( $location_id ) {
+		$instance = new self();
+		return $instance->get_location_token( $location_id );
+	}
+
+	/**
 	 * The OAuth connection is genuinely usable: the tokens verify AND we know
 	 * which sub-account to talk to. This is what the UI should mean by
 	 * "Connected" — it mirrors what aqm_ghl_get_active_auth() can actually
 	 * resolve, so the status badge can never claim "Connected" while real sends
-	 * would fail for lack of a sub-account.
+	 * would fail for lack of a sub-account. Works for BOTH a direct Location
+	 * token and an agency (Company) token paired with a stored target location,
+	 * since the latter can mint a Location token on demand.
 	 *
 	 * @param bool $force_fresh Skip the verification cache and re-verify now.
 	 * @return bool
