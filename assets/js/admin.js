@@ -10,6 +10,29 @@
 	}
 
 	$(function () {
+		$('#aqm-ghl-check-connection').on('click', async function () {
+			const $button = $(this);
+			const $result = $('#aqm-ghl-check-result');
+			$button.prop('disabled', true);
+			$result.removeClass('notice-success notice-error').text('Checking API access…').show();
+			try {
+				const response = await fetch(settings.ajaxUrl, {
+					method: 'POST', credentials: 'same-origin',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+					body: new URLSearchParams({ action: 'aqm_ghl_check_connection', nonce: settings.nonce }).toString(),
+				});
+				const json = await response.json();
+				const data = json.data || {};
+				const lines = [data.message || 'Connection check failed.'];
+				if (data.mode) lines.push('Active connection: ' + data.mode + ' · ' + data.location_id);
+				Object.entries(data.checks || {}).forEach(([name, code]) => lines.push(name + ': HTTP ' + code));
+				$result.addClass(json.success ? 'notice-success' : 'notice-error').text(lines.join('\n'));
+			} catch (error) {
+				$result.addClass('notice-error').text('Could not complete the connection check. Try again.');
+			} finally {
+				$button.prop('disabled', false);
+			}
+		});
 		const $testButton = $('#aqm-ghl-test-connection');
 		const $testResult = $('#aqm-ghl-test-result');
 

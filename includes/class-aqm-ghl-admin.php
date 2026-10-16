@@ -17,6 +17,7 @@ class AQM_GHL_Admin {
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
 		add_action( 'wp_ajax_aqm_ghl_test_connection', array( $this, 'ajax_test_connection' ) );
+		add_action( 'wp_ajax_aqm_ghl_check_connection', array( $this, 'ajax_check_connection' ) );
 		add_action( 'wp_ajax_aqm_ghl_clear_update_cache', array( $this, 'ajax_clear_update_cache' ) );
 		// Backfill / resend past submissions to GoHighLevel.
 		add_action( 'wp_ajax_aqm_ghl_backfill_list', array( $this, 'ajax_backfill_list' ) );
@@ -492,6 +493,8 @@ class AQM_GHL_Admin {
 
 				<h2 style="margin-top: 2.5em; border-top: 1px solid #dcdcde; padding-top: 1.5em;"><?php esc_html_e( 'Diagnostics & admin tools', 'aqm-ghl' ); ?></h2>
 				<p class="description"><?php esc_html_e( 'These tools are for troubleshooting and don\'t need to be touched in normal use.', 'aqm-ghl' ); ?></p>
+				<p><button type="button" class="button button-secondary" id="aqm-ghl-check-connection"><?php esc_html_e( 'Check connection (no test lead)', 'aqm-ghl' ); ?></button></p>
+				<div id="aqm-ghl-check-result" class="notice inline" role="status" style="display:none; white-space:pre-line;"></div>
 
 				<details style="margin: 1em 0; border: 1px solid #dcdcde; background: #fff;">
 					<summary style="cursor: pointer; padding: 10px 14px; background: #f6f7f7; font-weight: 600;">
@@ -594,6 +597,7 @@ class AQM_GHL_Admin {
 		$loc_name = isset( $settings['oauth_location_name'] ) ? (string) $settings['oauth_location_name'] : '';
 		$conn_at  = isset( $settings['oauth_connected_at'] ) ? (string) $settings['oauth_connected_at'] : '';
 		$mode     = function_exists( 'aqm_ghl_get_auth_mode' ) ? aqm_ghl_get_auth_mode() : 'pit';
+		$active_auth = aqm_ghl_get_active_auth();
 
 		// Human-friendly expiry (absolute UTC + relative to now).
 		$now = time();
@@ -635,6 +639,7 @@ class AQM_GHL_Admin {
 
 		$lines   = array();
 		$lines[] = 'AQM GHL — Connection diagnostics';
+		$lines[] = 'Active delivery: ' . ( is_wp_error( $active_auth ) ? 'unavailable' : $active_auth['mode'] . ' / ' . $active_auth['location_id'] );
 		$lines[] = 'Generated: ' . gmdate( 'Y-m-d H:i:s' ) . ' UTC';
 		$lines[] = 'Plugin version: ' . AQM_GHL_CONNECTOR_VERSION;
 		$lines[] = 'Site: ' . home_url();
@@ -1137,7 +1142,8 @@ class AQM_GHL_Admin {
 		// direct Location token already resolves its own sub-account.
 		if ( $has_tokens && $is_agency_token ) :
 			$agency_locations = function_exists( 'aqm_ghl_fetch_agency_locations' ) ? aqm_ghl_fetch_agency_locations() : array();
-			$needs_location   = ( '' === $location_id );
+			// A legacy fallback target is not a saved app target.
+			$needs_location   = empty( $settings['oauth_location_id'] );
 			?>
 			<div style="margin: 1em 0; border-left: 4px solid <?php echo $needs_location ? '#d63638' : '#2271b1'; ?>; background: #fff; padding: 12px 16px; box-shadow: 0 1px 1px rgba(0,0,0,0.04);">
 				<strong style="font-size: 14px; display: block; margin-bottom: 4px;">
@@ -1202,7 +1208,9 @@ class AQM_GHL_Admin {
 							}
 							?>
 						</div>
-						<?php if ( $is_agency_token ) : ?>
+						<?php if ( 'pit' === $active_send_mode && $has_tokens ) : ?>
+							<p class="description"><?php esc_html_e( 'Using the legacy private-token fallback. The app connection is not the active delivery path. Save its target sub-account above, then check the connection.', 'aqm-ghl' ); ?></p>
+						<?php elseif ( $is_agency_token ) : ?>
 							<div style="margin-top: 8px; padding: 8px 10px; background: #edfaef; border-left: 3px solid #00a32a; font-size: 12px; color: #50575e;">
 								<?php esc_html_e( 'Connected at the agency level and delivering to the sub-account above (the app mints a secure per-sub-account token automatically). To change which sub-account this site sends to, use the “Target sub-account” selector above.', 'aqm-ghl' ); ?>
 							</div>
@@ -1443,6 +1451,33 @@ class AQM_GHL_Admin {
 	 * @return array
 	 */
 	public function sanitize_settings( $input ) {
+		// WordPress also calls this filter for internal update_option() writes.
+		// Token refresh/location selection must never re-enter form mapping or
+		// reinterpret absent checkboxes as settings changes.
+		global $pagenow;
+		static $saving_form = false;
+		$is_form_save = 'options.php' === $pagenow
+			&& 'POST' === ( $_SERVER['REQUEST_METHOD'] ?? '' )
+			&& 'aqm_ghl_connector' === ( $_POST['option_page'] ?? '' )
+			&& 'update' === ( $_POST['action'] ?? '' )
+			&& current_user_can( 'manage_options' );
+		if ( ! is_array( $input ) ) {
+			$existing = get_option( AQM_GHL_OPTION_KEY, array() );
+			return is_array( $existing ) ? $existing : array();
+		}
+		if ( ! $is_form_save || $saving_form ) {
+			return $input;
+		}
+		$saving_form = true;
+		try {
+			return $this->sanitize_form_settings( $input );
+		} finally {
+			$saving_form = false;
+		}
+	}
+
+	/** Sanitize the settings form only; options.php validates its nonce. */
+	private function sanitize_form_settings( $input ) {
 		$raw_existing = get_option( AQM_GHL_OPTION_KEY, array() );
 		$raw_existing = is_array( $raw_existing ) ? $raw_existing : array();
 		$existing     = aqm_ghl_get_settings();
@@ -1651,7 +1686,11 @@ class AQM_GHL_Admin {
 		}
 
 		// Merge with existing so we never wipe keys (e.g. locations); ensures token update persists
-		$to_save = array_merge( $raw_existing, $sanitized );
+		// Mapping may have refreshed OAuth credentials during this save. Read the
+		// latest runtime values instead of restoring the pre-refresh snapshot.
+		$latest = get_option( AQM_GHL_OPTION_KEY, array() );
+		$latest = is_array( $latest ) ? $latest : $raw_existing;
+		$to_save = array_merge( $latest, $sanitized );
 
 		// CRITICAL: register_setting() applies this sanitizer to EVERY update_option()
 		// for this option — including AQM_GHL_OAuth::store_tokens() persisting a
@@ -1674,8 +1713,8 @@ class AQM_GHL_Admin {
 		) as $oauth_key ) {
 			if ( is_array( $input ) && array_key_exists( $oauth_key, $input ) ) {
 				$to_save[ $oauth_key ] = $input[ $oauth_key ];
-			} elseif ( array_key_exists( $oauth_key, $raw_existing ) ) {
-				$to_save[ $oauth_key ] = $raw_existing[ $oauth_key ];
+			} elseif ( array_key_exists( $oauth_key, $latest ) ) {
+				$to_save[ $oauth_key ] = $latest[ $oauth_key ];
 			}
 		}
 
@@ -1686,12 +1725,7 @@ class AQM_GHL_Admin {
 			}
 		}
 
-		add_settings_error(
-			'aqm-ghl-connector',
-			'aqm-ghl-connector-saved',
-			__( 'Settings saved.', 'aqm-ghl' ),
-			'updated'
-		);
+		// options.php supplies one success notice after the actual form save.
 
 		return $to_save;
 	}
@@ -1700,6 +1734,21 @@ class AQM_GHL_Admin {
 	/**
 	 * AJAX handler to test the connection by sending a mock contact.
 	 */
+	public function ajax_check_connection() {
+		check_ajax_referer( 'aqm_ghl_admin', 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( array( 'message' => 'Unauthorized' ), 403 );
+			return;
+		}
+		$result = aqm_ghl_check_connection();
+		if ( $result['ok'] ) {
+			wp_send_json_success( $result );
+		} else {
+			wp_send_json_error( $result );
+		}
+	}
+
+	/** Send an explicitly requested mock contact (separate from the read check). */
 	public function ajax_test_connection() {
 		check_ajax_referer( 'aqm_ghl_admin', 'nonce' );
 

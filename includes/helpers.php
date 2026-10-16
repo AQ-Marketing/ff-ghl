@@ -145,6 +145,54 @@ if ( ! function_exists( 'aqm_ghl_get_active_auth' ) ) {
 	}
 }
 
+/** Check current API read access without creating a contact or custom field. */
+function aqm_ghl_check_connection() {
+	$auth = aqm_ghl_get_active_auth();
+	if ( is_wp_error( $auth ) ) {
+		return array( 'ok' => false, 'message' => 'No usable connection. Check the app connection and target sub-account.', 'checks' => array() );
+	}
+	$settings = aqm_ghl_get_settings();
+	$location = rawurlencode( $auth['location_id'] );
+	$paths = array(
+		'fields' => '/locations/' . $location . '/customFields',
+		'contacts' => '/contacts/?locationId=' . $location . '&limit=1',
+	);
+	if ( ! empty( $settings['create_opportunity'] ) ) {
+		$paths['pipelines'] = '/opportunities/pipelines?locationId=' . $location;
+	}
+	$checks = array();
+	$ok = true;
+	$has_stage = true;
+	foreach ( $paths as $name => $path ) {
+		$response = wp_remote_get( 'https://services.leadconnectorhq.com' . $path, array(
+			'headers' => array( 'Authorization' => 'Bearer ' . $auth['token'], 'Version' => '2021-07-28', 'Accept' => 'application/json' ),
+			'timeout' => 10,
+		) );
+		$code = is_wp_error( $response ) ? 0 : (int) wp_remote_retrieve_response_code( $response );
+		$checks[ $name ] = $code;
+		$body = is_wp_error( $response ) ? null : json_decode( wp_remote_retrieve_body( $response ), true );
+		$key = 'fields' === $name ? 'customFields' : $name;
+		$valid = 200 === $code && is_array( $body ) && isset( $body[ $key ] ) && is_array( $body[ $key ] );
+		$ok = $ok && $valid;
+		if ( 'pipelines' === $name ) {
+			// The sender uses the first pipeline and first stage.
+			$has_stage = $valid && ! empty( $body['pipelines'][0]['id'] ) && ! empty( $body['pipelines'][0]['stages'][0]['id'] );
+			$ok = $ok && $has_stage;
+		}
+	}
+	return array(
+		'ok' => $ok,
+		'mode' => $auth['mode'],
+		'location_id' => $auth['location_id'],
+		'checks' => $checks,
+		'message' => $ok
+			? 'API read checks passed. No test lead was sent. Contact writes and notification delivery still require a controlled submission test.'
+			: ( ! $has_stage && 200 === ( $checks['pipelines'] ?? 0 )
+				? 'The first pipeline needs a stage before opportunities can be created.'
+				: 'An API check failed. Check app permissions and the target sub-account; HTTP 0 means a network failure.' ),
+	);
+}
+
 if ( ! function_exists( 'aqm_ghl_connection_state' ) ) {
 	/**
 	 * Single source of truth for the admin connection UI: can the plugin actually
